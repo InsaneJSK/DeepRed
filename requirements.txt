@@ -1,0 +1,4 @@
+pyboy
+pillow
+numpy
+keyboard
