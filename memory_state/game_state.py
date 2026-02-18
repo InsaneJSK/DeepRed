@@ -7,10 +7,10 @@ game state in a structured format.
 """
 
 import pprint
-from gamestate.memory_reader import MemoryReader, convert_text
-from gamestate.map_constants import MapLocation, Tileset
-from gamestate.pokemon_constants import Pokemon, PokemonType
-from gamestate.battle_constants import Badge, StatusCondition, Move, ITEMS
+from memory_reader import MemoryReader, convert_text
+from map_constants import MapLocation, Tileset
+from pokemon_constants import Pokemon, PokemonType
+from battle_constants import Badge, StatusCondition, Move, ITEMS
 
 MAP_ID_ADDR = 0xD35E
 PLAYER_X_ADDR = 0xD361
@@ -27,7 +27,7 @@ class PokemonGameState:
         self.mem = MemoryReader(pyby)
 
     @property
-    def map(self) -> dict[str, int | str]:
+    def map(self) -> dict[str, int | str | bool]:
         """Read current map and location status"""
         map_id = self.mem.read_byte(MAP_ID_ADDR)
         facing_val = self.mem.read_byte(PLAYER_FACING_ADDR)
@@ -42,13 +42,10 @@ class PokemonGameState:
             "player_x": self.mem.read_byte(PLAYER_X_ADDR),
             "player_y": self.mem.read_byte(PLAYER_Y_ADDR),
             "map_name": MapLocation(map_id).name.replace("_", " ").title(),
-            "player_facing": directions.get(facing_val, f"UNKNOWN({facing_val})")
+            "player_facing": directions.get(facing_val, f"UNKNOWN({facing_val})"),
+            "in_battle": bool(self.mem.read_byte(BATTLE_FLAG_ADDR)),
+            "tileset": Tileset(self.mem.read_byte(0xD367)).name.replace("_", " ")
             }
-
-    @property
-    def in_battle(self) -> bool:
-        """Reads the battle flag"""
-        return bool(self.mem.read_byte(BATTLE_FLAG_ADDR))
 
     @property
     def money(self) -> int:
@@ -66,18 +63,7 @@ class PokemonGameState:
         )
         return amount
 
-    @property
-    def player_name(self) -> str:
-        """Read the player's name"""
-        name_bytes = self.mem.read_bytes(0xD158, 0xD163)
-        return convert_text(name_bytes)
-
-    @property
-    def rival_name(self) -> str:
-        """Read rival's name"""
-        name_bytes = self.mem.read_bytes(0xD34A, 0x07)
-        return convert_text(name_bytes)
-
+    
     @property
     def badges(self) -> list[str]:
         """Read obtained badges as list of names"""
@@ -102,26 +88,13 @@ class PokemonGameState:
             badges.append("EARTH")
 
         return badges
-
-    def read_party_size(self) -> int:
-        """Read number of Pokemon in party"""
-        return self.mem.read_byte(0xD163)
-
-    def get_hp(self, addr) -> str:
-        """Returns the current hp"""
+    
+    def pkmn_info(self, addr) -> dict[str, str | int | list[tuple[str, int]]]:
         current_hp = (self.mem.read_byte(addr + 1) << 8) + self.mem.read_byte(addr + 2)
         max_hp = (self.mem.read_byte(addr + 0x22) << 8) + self.mem.read_byte(addr + 0x23)
-        return f"{current_hp}/{max_hp}"
-
-    def get_exp(self, addr) -> int:
-        """Returns the current experience points"""
         exp = ((self.mem.read_byte(addr + 0x1A) << 16) +
                 (self.mem.read_byte(addr + 0x1B) << 8) +
                 self.mem.read_byte(addr + 0x1C))
-        return exp
-
-    def get_moves_and_pp(self, addr) -> tuple[list[str], list[int]]:
-        """Read moves and PP"""
         moves = []
         move_pp = []
         for j in range(4):
@@ -129,13 +102,17 @@ class PokemonGameState:
             if move_id != 0:
                 moves.append(Move(move_id).name.replace("_", " "))
                 move_pp.append(self.mem.read_byte(addr + 0x1D + j))
-        return moves, move_pp
+        return {
+            "get_hp": f"{current_hp}/{max_hp}",
+            "get_exp": exp,
+            "get_moves_and_pp": list(zip(moves, move_pp))
+        }
 
     @property
     def party_pokemon(self) -> list[dict]:
         """Read all Pokemon currently in the party with full data"""
         party = []
-        party_size = self.read_party_size()
+        party_size = self.mem.read_byte(0xD163)
 
         # Base addresses for party Pokemon data
         base_addresses = [0xD16B, 0xD197, 0xD1C3, 0xD1EF, 0xD21B, 0xD247]
@@ -161,32 +138,22 @@ class PokemonGameState:
             except ValueError:
                 continue
             status_value = self.mem.read_byte(addr + 4)
+            pokemon_info = self.pkmn_info(addr)
             pokemon = {
                 "species_name": species_name,
-                "current_hp": self.get_hp(addr),
+                "current_hp": pokemon_info["get_hp"],
                 "level": self.mem.read_byte(addr + 0x21),  # Using actual level
                 "status": StatusCondition(status_value).get_status_name(),
                 "type1": type1.name.replace("_", " "),
                 "type2": type2.name.replace("_", " ") if type2 else None,
-                "moves, pp": list(zip(*self.get_moves_and_pp(addr))),
+                "moves, pp": pokemon_info["get_moves_and_pp"],
                 "trainer_id": (self.mem.read_byte(addr + 12) << 8) + self.mem.read_byte(addr + 13),
                 "nickname": nickname,
-                "experience": self.get_exp(addr),
+                "experience": pokemon_info["get_exp"],
             }
             party.append(pokemon)
 
         return party
-
-    @property
-    def tileset(self) -> str:
-        """Read current map's tileset name"""
-        tileset_id = self.mem.read_byte(0xD367)
-        return Tileset(tileset_id).name.replace("_", " ")
-
-    @property
-    def read_coins(self) -> int:
-        """Read game corner coins"""
-        return (self.mem.read_byte(0xD5A4) << 8) + self.mem.read_byte(0xD5A5)
 
     def read_item_count(self) -> int:
         """Read number of items in inventory"""
@@ -314,25 +281,13 @@ class PokemonGameState:
 
         return text
 
-    @property
-    def pokedex_caught_count(self) -> int:
-        """Read how many unique Pokemon species have been caught"""
-        # Pokedex owned flags are stored in D2F7-D309
-        # Each byte contains 8 flags for 8 Pokemon
-        # Total of 19 bytes = 152 Pokemon
-        caught_count = 0
-        for addr in range(0xD2F7, 0xD30A):
-            byte = self.mem.read_byte(addr)
-            # Count set bits in this byte
-            caught_count += bin(byte).count("1")
-        return caught_count
 
     def to_dict(self):
         """Convert the game state to a dictionary for easy serialization or analysis"""
         return {
             # "map_id": self.map_id,
             "map_name": self.map["map_name"],
-            "tileset": self.tileset,
+            "tileset": self.map["tileset"],
             "player": {
                 "x": self.map["player_x"],
                 "y": self.map["player_y"],
@@ -342,14 +297,10 @@ class PokemonGameState:
                 "items": self.items,
             },
                "status": {
-                "in_battle": self.in_battle,
+                "in_battle": self.map["in_battle"],
                 "badges": self.badges,
             },
             "misc": {
-                "player_name": self.player_name,
-                "rival_name": self.rival_name,
-                "coins": self.read_coins,
-                "pokedex_caught": self.pokedex_caught_count,
                 "dialog": self.dialog,
             }
         }
@@ -370,7 +321,8 @@ if __name__ == "__main__":
     import keyboard
 
     pyboy = PyBoy("Pokemon_Red/Red.gb", window="SDL2")
-
+    pyboy.tick()
+    # game = game_wrapper
     # load your save in the room
     with open("saves/in-room-start.state", "rb") as f:
         pyboy.load_state(f)
@@ -383,6 +335,7 @@ if __name__ == "__main__":
     while not keyboard.is_pressed("esc"):
         pyboy.tick()
         ctr+=1
-        if ctr % 60 == 0:
+        if ctr % 600 == 0:
             print(state.pretty_print())
+            # print(game.enabled)
     pyboy.stop()
