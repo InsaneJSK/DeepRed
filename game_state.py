@@ -1,7 +1,16 @@
+"""
+Defines the PokemonGameState class which reads and interprets memory values 
+from Pokemon Red using a MemoryReader. It provides properties to access various
+aspects of the game state such as player position, map, party Pokemon, items, badges,
+and dialog text. The class can be used to get a comprehensive snapshot of the current
+game state in a structured format.
+"""
+
+import pprint
 from gamestate.memory_reader import MemoryReader, convert_text
 from gamestate.map_constants import MapLocation, Tileset
 from gamestate.pokemon_constants import Pokemon, PokemonType
-from gamestate.battle_constants import Badge, StatusCondition, Move, Items
+from gamestate.battle_constants import Badge, StatusCondition, Move, ITEMS
 
 MAP_ID_ADDR = 0xD35E
 PLAYER_X_ADDR = 0xD361
@@ -12,42 +21,35 @@ BATTLE_FLAG_ADDR = 0xD057
 
 class PokemonGameState:
     """Reads and interprets memory values from Pokemon Red"""
-    def __init__(self, pyboy):
+    def __init__(self, pyby):
         """Initialize with a PyBoy memory view object"""
-        self.pyboy = pyboy
-        self.mem = MemoryReader(pyboy)
+        self.pyboy = pyby
+        self.mem = MemoryReader(pyby)
 
     @property
-    def map_id(self) -> int:
-        return self.mem.read_byte(MAP_ID_ADDR)
-
-    @property
-    def player_x(self) -> int:
-        return self.mem.read_byte(PLAYER_X_ADDR)
-
-    @property
-    def player_y(self) -> int:
-        return self.mem.read_byte(PLAYER_Y_ADDR)
-
-    @property
-    def map_name(self) -> str:
-        return MapLocation(self.map_id).name.replace("_", " ").title()
-    
-    @property
-    def player_facing(self) -> str:
-        val = self.mem.read_byte(PLAYER_FACING_ADDR)
+    def map(self) -> dict[str, int | str]:
+        """Read current map and location status"""
+        map_id = self.mem.read_byte(MAP_ID_ADDR)
+        facing_val = self.mem.read_byte(PLAYER_FACING_ADDR)
         directions = {
             0x0: "DOWN",
             0x4: "UP",
             0x8: "LEFT",
             0xc: "RIGHT",
         }
-        return directions.get(val, f"UNKNOWN({val})")
-    
+        return {
+            "map_id": map_id,
+            "player_x": self.mem.read_byte(PLAYER_X_ADDR),
+            "player_y": self.mem.read_byte(PLAYER_Y_ADDR),
+            "map_name": MapLocation(map_id).name.replace("_", " ").title(),
+            "player_facing": directions.get(facing_val, f"UNKNOWN({facing_val})")
+            }
+
     @property
     def in_battle(self) -> bool:
+        """Reads the battle flag"""
         return bool(self.mem.read_byte(BATTLE_FLAG_ADDR))
-    
+
     @property
     def money(self) -> int:
         """Read the player's money in Binary Coded Decimal format"""
@@ -69,7 +71,7 @@ class PokemonGameState:
         """Read the player's name"""
         name_bytes = self.mem.read_bytes(0xD158, 0xD163)
         return convert_text(name_bytes)
-    
+
     @property
     def rival_name(self) -> str:
         """Read rival's name"""
@@ -104,7 +106,31 @@ class PokemonGameState:
     def read_party_size(self) -> int:
         """Read number of Pokemon in party"""
         return self.mem.read_byte(0xD163)
-    
+
+    def get_hp(self, addr) -> str:
+        """Returns the current hp"""
+        current_hp = (self.mem.read_byte(addr + 1) << 8) + self.mem.read_byte(addr + 2)
+        max_hp = (self.mem.read_byte(addr + 0x22) << 8) + self.mem.read_byte(addr + 0x23)
+        return f"{current_hp}/{max_hp}"
+
+    def get_exp(self, addr) -> int:
+        """Returns the current experience points"""
+        exp = ((self.mem.read_byte(addr + 0x1A) << 16) +
+                (self.mem.read_byte(addr + 0x1B) << 8) +
+                self.mem.read_byte(addr + 0x1C))
+        return exp
+
+    def get_moves_and_pp(self, addr) -> tuple[list[str], list[int]]:
+        """Read moves and PP"""
+        moves = []
+        move_pp = []
+        for j in range(4):
+            move_id = self.mem.read_byte(addr + 8 + j)
+            if move_id != 0:
+                moves.append(Move(move_id).name.replace("_", " "))
+                move_pp.append(self.mem.read_byte(addr + 0x1D + j))
+        return moves, move_pp
+
     @property
     def party_pokemon(self) -> list[dict]:
         """Read all Pokemon currently in the party with full data"""
@@ -117,22 +143,6 @@ class PokemonGameState:
 
         for i in range(party_size):
             addr = base_addresses[i]
-
-            # Read experience (3 bytes)
-            exp = (
-                (self.mem.read_byte(addr + 0x1A) << 16)
-                + (self.mem.read_byte(addr + 0x1B) << 8)
-                + self.mem.read_byte(addr + 0x1C)
-            )
-
-            # Read moves and PP
-            moves = []
-            move_pp = []
-            for j in range(4):
-                move_id = self.mem.read_byte(addr + 8 + j)
-                if move_id != 0:
-                    moves.append(Move(move_id).name.replace("_", " "))
-                    move_pp.append(self.mem.read_byte(addr + 0x1D + j))
 
             # Read nickname
             nickname = convert_text(
@@ -151,18 +161,17 @@ class PokemonGameState:
             except ValueError:
                 continue
             status_value = self.mem.read_byte(addr + 4)
-            
             pokemon = {
                 "species_name": species_name,
-                "current_hp": f"{(self.mem.read_byte(addr + 1) << 8) + self.mem.read_byte(addr + 2)}/{(self.mem.read_byte(addr + 0x22) << 8) + self.mem.read_byte(addr + 0x23)}",
+                "current_hp": self.get_hp(addr),
                 "level": self.mem.read_byte(addr + 0x21),  # Using actual level
                 "status": StatusCondition(status_value).get_status_name(),
                 "type1": type1.name.replace("_", " "),
                 "type2": type2.name.replace("_", " ") if type2 else None,
-                "moves, pp": list(zip(moves, move_pp)),
+                "moves, pp": list(zip(*self.get_moves_and_pp(addr))),
                 "trainer_id": (self.mem.read_byte(addr + 12) << 8) + self.mem.read_byte(addr + 13),
                 "nickname": nickname,
-                "experience": exp,
+                "experience": self.get_exp(addr),
             }
             party.append(pokemon)
 
@@ -183,10 +192,41 @@ class PokemonGameState:
         """Read number of items in inventory"""
         return self.mem.read_byte(0xD31D)
 
+    def _is_text_byte(self, b: int) -> bool:
+        """Helper function to determine if a byte is a valid text character in Red's encoding"""
+        return (
+            # Box drawing (0x79-0x7E)
+            # (0x79 <= b <= 0x7E)
+            # or
+            # Uppercase (0x80-0x99)
+            (0x80 <= b <= 0x99)
+            or
+            # Punctuation (0x9A-0x9F)
+            (0x9A <= b <= 0x9F)
+            or
+            # Lowercase (0xA0-0xB9)
+            (0xA0 <= b <= 0xB9)
+            or
+            # Contractions (0xBA-0xBF)
+            (0xBA <= b <= 0xBF)
+            or
+            # Special characters in E-row (0xE0-0xEF)
+            (0xE0 <= b <= 0xEF)
+            or
+            # Special characters in F-row (0xF0-0xF5)
+            (0xF0 <= b <= 0xF5)
+            or
+            # Numbers (0xF6-0xFF)
+            (0xF6 <= b <= 0xFF)
+            or
+            # Line break
+            b == 0x4E
+        )
+
     @property
     def items(self) -> list[tuple[str, int]]:
         """Read all items in inventory with proper item names"""
-        ITEM_NAMES = Items
+        item_names = ITEMS
 
         item_list = []
         count = self.read_item_count()
@@ -202,10 +242,8 @@ class PokemonGameState:
             elif 0xC4 <= item_id <= 0xC8:
                 hm_num = item_id - 0xC3
                 item_name = f"HM{hm_num:02d}"
-            elif item_id in ITEM_NAMES:
-                item_name = ITEM_NAMES[item_id]
             else:
-                item_name = f"UNKNOWN_{item_id:02X}"
+                item_name = item_names.get(item_id, f"UNKNOWN_{item_id:02X}")
 
             item_list.append((item_name, quantity))
 
@@ -245,34 +283,7 @@ class PokemonGameState:
                 current_line.append(b)  # Always keep spaces
                 last_was_border = False
             # All text characters: uppercase, lowercase, special chars, punctuation, symbols
-            elif (
-                # Box drawing (0x79-0x7E)
-                # (0x79 <= b <= 0x7E)
-                # or
-                # Uppercase (0x80-0x99)
-                (0x80 <= b <= 0x99)
-                or
-                # Punctuation (0x9A-0x9F)
-                (0x9A <= b <= 0x9F)
-                or
-                # Lowercase (0xA0-0xB9)
-                (0xA0 <= b <= 0xB9)
-                or
-                # Contractions (0xBA-0xBF)
-                (0xBA <= b <= 0xBF)
-                or
-                # Special characters in E-row (0xE0-0xEF)
-                (0xE0 <= b <= 0xEF)
-                or
-                # Special characters in F-row (0xF0-0xF5)
-                (0xF0 <= b <= 0xF5)
-                or
-                # Numbers (0xF6-0xFF)
-                (0xF6 <= b <= 0xFF)
-                or
-                # Line break
-                b == 0x4E
-            ):
+            elif self._is_text_byte(b):
                 space_count = 0
                 current_line.append(b)
                 last_was_border = (
@@ -317,18 +328,19 @@ class PokemonGameState:
         return caught_count
 
     def to_dict(self):
+        """Convert the game state to a dictionary for easy serialization or analysis"""
         return {
             # "map_id": self.map_id,
-            "map_name": self.map_name,
+            "map_name": self.map["map_name"],
             "tileset": self.tileset,
             "player": {
-                "x": self.player_x,
-                "y": self.player_y,
-                "facing": self.player_facing,
+                "x": self.map["player_x"],
+                "y": self.map["player_y"],
+                "facing": self.map["player_facing"],
                 "money": self.money,
                 "party": self.party_pokemon,
                 "items": self.items,
-            },            
+            },
                "status": {
                 "in_battle": self.in_battle,
                 "badges": self.badges,
@@ -341,15 +353,15 @@ class PokemonGameState:
                 "dialog": self.dialog,
             }
         }
-    
+
     def __repr__(self):
         return f"<PokemonGameState> {self.to_dict()}>"
-    
+
     def __str__(self):
         return self.__repr__()
-    
+
     def pretty_print(self):
-        import pprint
+        """Pretty print the game state dictionary"""
         pp = pprint.PrettyPrinter(indent=2)
         pp.pprint(self.to_dict())
 
@@ -371,6 +383,6 @@ if __name__ == "__main__":
     while not keyboard.is_pressed("esc"):
         pyboy.tick()
         ctr+=1
-        if ctr % 600 == 0:
+        if ctr % 60 == 0:
             print(state.pretty_print())
     pyboy.stop()

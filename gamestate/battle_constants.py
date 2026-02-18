@@ -1,31 +1,40 @@
+"""
+This module defines constants and enums for Pokémon status conditions, moves, badges, and items.
+"""
+
+
 from enum import IntEnum, IntFlag
 
 class StatusCondition(IntFlag):
+    """
+    Flags for Pokémon status conditions.
+    Sleep uses bits 0-2 to represent the number of turns asleep (1-7)
+    """
+
     NONE = 0
-    SLEEP_MASK = 0b111  # Bits 0-2
-    SLEEP = 0b001  # For name display purposes
+    SLEEP = 0b111  # Bits 0-2 (technically a mask, not a flag)
     POISON = 0b1000  # Bit 3
     BURN = 0b10000  # Bit 4
     FREEZE = 0b100000  # Bit 5
     PARALYSIS = 0b1000000  # Bit 6
-    
+
     @property
     def is_asleep(self) -> bool:
         """Check if the Pokémon is asleep (any value in bits 0-2)"""
         # For sleep, we directly check if any bits in positions 0-2 are set (values 1-7)
-        return bool(int(self) & 0b111)
-    
+        return bool(self & StatusCondition.SLEEP)
+
     def get_status_name(self) -> str:
         """Get a human-readable status name"""
         if self.is_asleep:
             return "SLEEP"
-        elif self & StatusCondition.PARALYSIS:
+        if self & StatusCondition.PARALYSIS:
             return "PARALYSIS"
-        elif self & StatusCondition.FREEZE:
+        if self & StatusCondition.FREEZE:
             return "FREEZE"
-        elif self & StatusCondition.BURN:
+        if self & StatusCondition.BURN:
             return "BURN"
-        elif self & StatusCondition.POISON:
+        if self & StatusCondition.POISON:
             return "POISON"
         return "OK"
 
@@ -212,7 +221,7 @@ class Badge(IntFlag):
     VOLCANO = 1 << 6
     EARTH = 1 << 7
 
-Items = {
+ITEMS = {
             0x01: "MASTER BALL",
             0x02: "ULTRA BALL",
             0x03: "GREAT BALL",
@@ -290,3 +299,12 @@ Items = {
             0x52: "ELIXER",
             0x53: "MAX ELIXER",
         }
+
+if __name__ == "__main__":
+    # Example usage
+    status = StatusCondition.SLEEP | StatusCondition.PARALYSIS
+    print(f"Status: {status.get_status_name()}")  # Should print "SLEEP"
+    print(f"Is asleep? {status.is_asleep}")  # Should print True
+    print(f"Move ID 0x34: {Move(0x34).name}")  # Should print "EMBER"
+    print(f"Item ID 0x10: {ITEMS[0x10]}")  # Should print "FULL RESTORE"
+    print(f"Badges: {Badge.BOULDER | Badge.THUNDER}")  # Should print "Badge.BOULDER|THUNDER"

@@ -1,3 +1,8 @@
+"""
+Maps location and tileset IDs to their names
+"""
+
+
 from enum import IntEnum
 
 class MapLocation(IntEnum):
