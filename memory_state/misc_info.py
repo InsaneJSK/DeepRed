@@ -1,5 +1,9 @@
+"""
+Module to read miscellaneous game information like player names, coins, and pokedex count.
+"""
+
 import pprint
-from memory_reader import MemoryReader, convert_text
+from memory_state.memory_reader import MemoryReader, convert_text
 
 class MiscInfo:
     """Class to read miscellaneous game information like player names, coins, and pokedex count."""
@@ -33,10 +37,22 @@ class MiscInfo:
             caught_count += bin(byte).count("1")
         return caught_count
 
-    def _to_dict(self):
+    def to_dict(self):
+        """Convert the misc info to a dictionary for easy printing/logging"""
         return {
             "player_name": self.names[0],
             "rival_name": self.names[1],
             "coins": self.read_coins,
             "pokedex_caught": self.pokedex_caught_count,
         }
+
+    def __repr__(self):
+        return f"<MiscInfo> {self.to_dict()}>"
+
+    def __str__(self):
+        return self.__repr__()
+
+    def pretty_print(self):
+        """Pretty print the game state dictionary"""
+        pp = pprint.PrettyPrinter(indent=2)
+        pp.pprint(self.to_dict())

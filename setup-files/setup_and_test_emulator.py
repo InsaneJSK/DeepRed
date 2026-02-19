@@ -1,3 +1,7 @@
+"""
+This script tests the PyBoy emulator setup by loading a save state and simulating button presses
+"""
+
 from pyboy import PyBoy
 from pyboy.utils import WindowEvent
 import os

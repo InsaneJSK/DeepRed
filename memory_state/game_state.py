@@ -7,10 +7,10 @@ game state in a structured format.
 """
 
 import pprint
-from memory_reader import MemoryReader, convert_text
-from map_constants import MapLocation, Tileset
-from pokemon_constants import Pokemon, PokemonType
-from battle_constants import Badge, StatusCondition, Move, ITEMS
+from memory_state.memory_reader import MemoryReader, convert_text
+from memory_state.map_constants import MapLocation, Tileset
+from memory_state.pokemon_constants import Pokemon, PokemonType
+from memory_state.battle_constants import Badge, StatusCondition, Move, ITEMS
 
 MAP_ID_ADDR = 0xD35E
 PLAYER_X_ADDR = 0xD361
@@ -63,7 +63,6 @@ class PokemonGameState:
         )
         return amount
 
-    
     @property
     def badges(self) -> list[str]:
         """Read obtained badges as list of names"""
@@ -88,13 +87,14 @@ class PokemonGameState:
             badges.append("EARTH")
 
         return badges
-    
+
     def pkmn_info(self, addr) -> dict[str, str | int | list[tuple[str, int]]]:
+        """Read detailed info for a Pokemon at the given party slot address"""
         current_hp = (self.mem.read_byte(addr + 1) << 8) + self.mem.read_byte(addr + 2)
         max_hp = (self.mem.read_byte(addr + 0x22) << 8) + self.mem.read_byte(addr + 0x23)
-        exp = ((self.mem.read_byte(addr + 0x1A) << 16) +
-                (self.mem.read_byte(addr + 0x1B) << 8) +
-                self.mem.read_byte(addr + 0x1C))
+        # exp = ((self.mem.read_byte(addr + 0x1A) << 16) +
+        #         (self.mem.read_byte(addr + 0x1B) << 8) +
+        #         self.mem.read_byte(addr + 0x1C))
         moves = []
         move_pp = []
         for j in range(4):
@@ -104,7 +104,7 @@ class PokemonGameState:
                 move_pp.append(self.mem.read_byte(addr + 0x1D + j))
         return {
             "get_hp": f"{current_hp}/{max_hp}",
-            "get_exp": exp,
+            # "get_exp": exp,
             "get_moves_and_pp": list(zip(moves, move_pp))
         }
 
@@ -149,7 +149,7 @@ class PokemonGameState:
                 "moves, pp": pokemon_info["get_moves_and_pp"],
                 "trainer_id": (self.mem.read_byte(addr + 12) << 8) + self.mem.read_byte(addr + 13),
                 "nickname": nickname,
-                "experience": pokemon_info["get_exp"],
+                # "experience": pokemon_info["get_exp"],
             }
             party.append(pokemon)
 

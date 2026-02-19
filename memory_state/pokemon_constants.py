@@ -1,6 +1,11 @@
+"""
+Defines constants related to Pokemon types and species, used for interpreting memory values.
+"""
+
 from enum import IntEnum
 
 class PokemonType(IntEnum):
+    """Maps Pokemon type IDs to their names"""
     NORMAL = 0x00
     FIGHTING = 0x01
     FLYING = 0x02
@@ -19,7 +24,6 @@ class PokemonType(IntEnum):
 
 class Pokemon(IntEnum):
     """Maps Pokemon species IDs to their names"""
-
     RHYDON = 0x01
     KANGASKHAN = 0x02
     NIDORAN_M = 0x03
