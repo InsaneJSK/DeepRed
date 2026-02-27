@@ -18,7 +18,6 @@ PLAYER_Y_ADDR = 0xD362
 PLAYER_FACING_ADDR = 0xC109
 BATTLE_FLAG_ADDR = 0xD057
 
-
 class PokemonGameState:
     """Reads and interprets memory values from Pokemon Red"""
     def __init__(self, pyby):

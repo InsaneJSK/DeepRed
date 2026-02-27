@@ -212,3 +212,6 @@ project-struct.py
 Pokemon_Red/
 cloned/
 saves/
+
+#linting
+lint_report.txt

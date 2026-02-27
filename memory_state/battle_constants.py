@@ -2,7 +2,6 @@
 This module defines constants and enums for Pokémon status conditions, moves, badges, and items.
 """
 
-
 from enum import IntEnum, IntFlag
 
 class StatusCondition(IntFlag):
@@ -207,7 +206,6 @@ class Move(IntEnum):
     SLASH = 0xA3
     SUBSTITUTE = 0xA4
     STRUGGLE = 0xA5
-
 
 class Badge(IntFlag):
     """Flags for gym badges"""

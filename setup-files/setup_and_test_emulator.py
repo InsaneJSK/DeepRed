@@ -2,27 +2,28 @@
 This script tests the PyBoy emulator setup by loading a save state and simulating button presses
 """
 
-from pyboy import PyBoy
-from pyboy.utils import WindowEvent
 import os
 import keyboard
+from pyboy import PyBoy
+from pyboy.utils import WindowEvent  # pylint: disable=no-name-in-module
 
 # --- Paths ---
 ROM_PATH = os.path.join("Pokemon_Red", "Red.gb")
 SAVE_STATE_PATH = os.path.join("saves", "in-room-start.state")
 
 # --- Launch Emulator ---
-pyboy = PyBoy(ROM_PATH, window="SDL2")
-pyboy.set_emulation_speed(1)  # 1 = real-time
+state = PyBoy(ROM_PATH, window="SDL2")
+state.set_emulation_speed(1)  # 1 = real-time
 
 # --- Load Save State ---
 with open(SAVE_STATE_PATH, "rb") as f:
-    pyboy.load_state(f)
+    state.load_state(f)
 
 print("[INFO] Save state loaded. Player should be in room.")
 
 # --- Controller Wrapper ---
-class Controller:
+class ControllerTest:  # pylint: disable=too-few-public-methods
+    """A simple wrapper to simulate button presses with timing."""
     def __init__(self, pyboy):
         self.pyboy = pyboy
         self.release_map = {
@@ -36,13 +37,14 @@ class Controller:
         }
 
     def press(self, button, frames=12):
+        """Press a button for a number of frames."""
         self.pyboy.send_input(button)
         for _ in range(frames):
             self.pyboy.tick()
         self.pyboy.send_input(self.release_map[button])
 
 # --- Instantiate controller ---
-controller = Controller(pyboy)
+controller = ControllerTest(state)
 
 # --- Test Movement ---
 print("[INFO] Testing movement...")
@@ -53,15 +55,15 @@ controller.press(WindowEvent.PRESS_ARROW_UP)
 
 # --- Test Buttons ---
 controller.press(WindowEvent.PRESS_BUTTON_START)
-pyboy.tick(2)
+state.tick(2)
 controller.press(WindowEvent.PRESS_BUTTON_A)
-pyboy.tick(2)
+state.tick(2)
 controller.press(WindowEvent.PRESS_BUTTON_B)
 
 print("[INFO] Movement test done. Emulator running...")
 
 print("Press ESC to quit.")
 while not keyboard.is_pressed("esc"):
-    pyboy.tick()
+    state.tick()
 
-pyboy.stop()
+state.stop()
