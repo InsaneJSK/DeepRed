@@ -45,9 +45,9 @@ class MapLocation(IntEnum):
     ROUTE_23 = 0x22
     ROUTE_24 = 0x23
     ROUTE_25 = 0x24
-    PLAYERS_HOUSE_1F = 0x25
-    PLAYERS_HOUSE_2F = 0x26
-    RIVALS_HOUSE = 0x27
+    REDS_HOUSE_1F = 0x25
+    REDS_HOUSE_2F = 0x26
+    BLUES_HOUSE = 0x27
     OAKS_LAB = 0x28
     VIRIDIAN_POKECENTER = 0x29
     VIRIDIAN_MART = 0x2A
@@ -259,3 +259,11 @@ class Tileset(IntEnum):
     CLUB = 0x15
     FACILITY = 0x16
     PLATEAU = 0x17
+
+if __name__ == "__main__":
+    """Test the enums"""
+    print("Testing Map IDs:")
+    vals = [0, 1, 2, 3, 4, 61]
+    for name, value in MapLocation.__members__.items():
+        if value.value in vals:
+            print(f"  {name}: {value}")

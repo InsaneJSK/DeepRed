@@ -37,43 +37,43 @@ class ControllerTest:  # pylint: disable=too-few-public-methods
 # --- Instantiate controller ---
 controller = ControllerTest(state)
 
-# # --- Test Movement ---
-# print("[INFO] Testing movement...")
-# controller.press(WindowEvent.PRESS_ARROW_RIGHT)
-# controller.press(WindowEvent.PRESS_ARROW_DOWN)
-# controller.press(WindowEvent.PRESS_ARROW_LEFT)
-# controller.press(WindowEvent.PRESS_ARROW_UP)
+# --- Test Movement ---
+print("[INFO] Testing movement...")
+controller.press(WindowEvent.PRESS_ARROW_RIGHT)
+controller.press(WindowEvent.PRESS_ARROW_DOWN)
+controller.press(WindowEvent.PRESS_ARROW_LEFT)
+controller.press(WindowEvent.PRESS_ARROW_UP)
 
-# # --- Test Buttons ---
-# controller.press(WindowEvent.PRESS_BUTTON_START)
-# state.tick(2)
-# controller.press(WindowEvent.PRESS_BUTTON_A)
-# state.tick(2)
-# controller.press(WindowEvent.PRESS_BUTTON_B)
+# --- Test Buttons ---
+controller.press(WindowEvent.PRESS_BUTTON_START)
+state.tick(2)
+controller.press(WindowEvent.PRESS_BUTTON_A)
+state.tick(2)
+controller.press(WindowEvent.PRESS_BUTTON_B)
 
-def warps(state):
-    mem = MemoryReader(state)
-    warp_count = mem.read_byte(0xD36A)
-    warp = []
-    base = 0xD36B
+# def warps(state):
+#     mem = MemoryReader(state)
+#     warp_count = mem.read_byte(0xD36A)
+#     warp = []
+#     base = 0xD36B
 
-    for i in range(warp_count):
-        y = mem.read_byte(base + i*4)
-        x = mem.read_byte(base + i*4 + 1)
-        dest_warp = mem.read_byte(base + i*4 + 2)
-        dest_map = mem.read_byte(base + i*4 + 3)
-        if (x, y) not in [(0, 0), (255, 255), (0, 255), (255, 0)]:
-            warp.append((x, y, dest_map, dest_warp))
-    print(game.game_area_collision()) #type: ignore
-    return warp
+#     for i in range(warp_count):
+#         y = mem.read_byte(base + i*4)
+#         x = mem.read_byte(base + i*4 + 1)
+#         dest_warp = mem.read_byte(base + i*4 + 2)
+#         dest_map = mem.read_byte(base + i*4 + 3)
+#         if (x, y) not in [(0, 0), (255, 255), (0, 255), (255, 0)]:
+#             warp.append((x, y, dest_map, dest_warp))
+#     print(game.game_area_collision()) #type: ignore
+#     return warp
 
-ctr = 0
-while keyboard.is_pressed("esc") == False:
-    state.tick()
-    ctr += 1
-    if ctr % 100 == 0:
-        print(warps(state))
+# ctr = 0
+# while keyboard.is_pressed("esc") == False:
+#     state.tick()
+#     ctr += 1
+#     if ctr % 100 == 0:
+#         print(warps(state))
 
-state.stop()
+# state.stop()
 
 

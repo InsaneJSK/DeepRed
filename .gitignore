@@ -215,3 +215,5 @@ saves/
 
 #linting
 lint_report.txt
+world_graph.json
+autonomous_controller/pokemon_world_graph.json

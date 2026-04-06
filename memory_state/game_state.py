@@ -13,8 +13,8 @@ from memory_state.pokemon_constants import Pokemon, PokemonType
 from memory_state.battle_constants import Badge, StatusCondition, Move, ITEMS
 
 MAP_ID_ADDR = 0xD35E
-PLAYER_X_ADDR = 0xD361
-PLAYER_Y_ADDR = 0xD362
+PLAYER_X_ADDR = 0xD362
+PLAYER_Y_ADDR = 0xD361
 PLAYER_FACING_ADDR = 0xC109
 BATTLE_FLAG_ADDR = 0xD057
 
