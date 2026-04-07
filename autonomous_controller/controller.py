@@ -266,10 +266,11 @@ class AutonomousController:
         world coordinates via the VRAM scroll registers SCX/SCY.
         Tiles outside the current viewport are conservatively impassable.
         """
+        
         scx = self.mem.read_byte(0xFF43)  # scroll X pixels
         scy = self.mem.read_byte(0xFF42)  # scroll Y pixels
         vp_tile_x = scx // 8
-        vp_tile_y = scy // 8
+        vp_tile_y = (scy // 8) if scy < 128 else (scy - 256) // 8
         collision = self.game.game_area_collision()  # shape: [18][20]
 
         def is_passable(wx: int, wy: int) -> bool:
@@ -277,7 +278,7 @@ class AutonomousController:
             row = wy - vp_tile_y
             if 0 <= row < 18 and 0 <= col < 20:
                 return bool(collision[row][col])
-            return False
+            return True
 
         return is_passable
 
@@ -396,12 +397,9 @@ class AutonomousController:
 
             passable = self._build_passable_fn()
 
-            _passable_snap = passable
-            _blocked_snap  = confirmed_blocked
-            def passable_with_memory(wx, wy):
-                return (wx, wy) not in _blocked_snap and _passable_snap(wx, wy)
+            def passable_with_memory(wx, wy, _p=passable, _b=confirmed_blocked):
+                return (wx, wy) not in _b and _p(wx, wy)
 
-            # If goal is blocked (NPC/furniture), target nearest passable neighbour
             effective_gx, effective_gy = goal_x, goal_y
             if not passable_with_memory(goal_x, goal_y):
                 for ddx, ddy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
@@ -416,7 +414,6 @@ class AutonomousController:
                 print(f"  [A*] No path to ({effective_gx},{effective_gy}) from ({cx},{cy})")
                 return False
 
-            # Execute only first step, then replan
             direction = path[0]
             dx, dy, _, _ = DIRECTIONS[direction]
             intended_x, intended_y = cx + dx, cy + dy
@@ -424,17 +421,81 @@ class AutonomousController:
             moved = self._step(direction)
 
             if not moved:
-                # Didn't move — mark that tile as blocked and replan around it
-                print(f"  [A*] Bumped ({intended_x},{intended_y}), marking blocked")
-                confirmed_blocked.add((intended_x, intended_y))
-                # Don't return or call direct_walk — just loop and replan with new info
+                print(f"  [A*] Blocked at ({intended_x},{intended_y}), attempting dodge")
+                # Dodge perpendicular to intended direction, but only toward goal
+                dodged = self._dodge(direction, goal_x, goal_y)
+                if not dodged:
+                    print(f"  [A*] Dodge failed, marking ({intended_x},{intended_y}) blocked")
+                    confirmed_blocked.add((intended_x, intended_y))
 
-            # Success for adjacent-tile targeting
             nx, ny = self._pos()
             if (nx, ny) == (effective_gx, effective_gy) and (effective_gx, effective_gy) != (goal_x, goal_y):
                 return True
 
         return self._pos() == (goal_x, goal_y)
+
+
+    def _dodge(self, blocked_direction: str, goal_x: int, goal_y: int, max_dodge: int = 4) -> bool:
+        """
+        Try to navigate around a sprite obstacle by stepping perpendicular
+        to the blocked direction, biased toward the goal, then retrying.
+        
+        If blocked going right/left → try up or down (whichever is toward goal)
+        If blocked going up/down   → try right or left (whichever is toward goal)
+        
+        After each perpendicular step, retry the original direction.
+        Returns True if we successfully moved past the obstacle.
+        """
+        cx, cy = self._pos()
+        dx_to_goal = goal_x - cx
+        dy_to_goal = goal_y - cy
+
+        # Determine which perpendicular directions to try, biased toward goal
+        if blocked_direction in ("left", "right"):
+            # Blocked horizontally — dodge vertically
+            # Primary: whichever vertical direction is toward goal
+            # Secondary: the other vertical direction
+            if dy_to_goal <= 0:
+                perp_dirs = ["up", "down"]
+            else:
+                perp_dirs = ["down", "up"]
+        else:
+            # Blocked vertically — dodge horizontally
+            if dx_to_goal >= 0:
+                perp_dirs = ["right", "left"]
+            else:
+                perp_dirs = ["left", "right"]
+
+        for perp_dir in perp_dirs:
+            for dodge_step in range(1, max_dodge + 1):
+                # Try stepping perpendicular
+                moved = self._step(perp_dir)
+                if not moved:
+                    # Can't go this perpendicular direction either, try the other
+                    break
+
+                # Now retry the original blocked direction
+                retry_moved = self._step(blocked_direction)
+                if retry_moved:
+                    print(f"  [DODGE] Cleared obstacle after {dodge_step} {perp_dir} step(s)")
+                    return True
+                # Still blocked — keep dodging in same perpendicular direction
+
+            # This perpendicular direction didn't work, undo and try the other
+            # Walk back the dodge steps we took
+            undo_dir = OPPOSITE[perp_dir]
+            cx_now, cy_now = self._pos()
+            cx_orig, cy_orig = cx, cy
+            # Figure out how many steps we actually took in perp direction
+            if perp_dir in ("up", "down"):
+                steps_taken = abs(cy_now - cy_orig)
+            else:
+                steps_taken = abs(cx_now - cx_orig)
+            
+            for _ in range(steps_taken):
+                self._step(undo_dir)
+
+        return False
     
     def _direct_walk(self, goal_x: int, goal_y: int, max_steps: int = 30) -> bool:
         """
@@ -475,12 +536,12 @@ class AutonomousController:
             return False
 
         print(f"  [WARP] Navigating to warp tile ({warp['x']}, {warp['y']}) → {dst_map}")
-        self.navigate_to_tile(warp["x"], warp["y"])
-        if self._map_id() == dest_map_id:
-            return True
-    
-        # Standing on the warp tile triggers the transition automatically.
-        # Tick through the fade animation until the map ID changes.
+        for direction, (dx, dy, _, _) in DIRECTIONS.items():
+            approach_tile = warp['x'] - dx, warp['y'] - dy
+            self.navigate_to_tile(*approach_tile)
+            if self._step(direction):
+                if self._wait_for_map_change(dest_map_id) and self._map_id() == dest_map_id:
+                    return True
         return self._wait_for_map_change(dest_map_id)
 
     def _execute_connection_hop(self, arrow_dir: str, dst_map: str) -> bool:
