@@ -17,11 +17,18 @@ Expects the subclass to supply:
     self._expected_map_id — int (current expected map id)
 """
 
-from autonomous_controller.constants import DIRECTIONS, OPPOSITE, ADDR_MAP_ID, ADDR_WARP_COUNT, ADDR_WARP_BASE
-from pyboy.utils import WindowEvent  # pylint: disable=no-name-in-module
+from typing import Any, Protocol, Callable
+from autonomous_controller.constants import (DIRECTIONS, OPPOSITE,
+                                             ADDR_MAP_ID, ADDR_WARP_COUNT, ADDR_WARP_BASE)
 
+class _NavCoreDeps(Protocol): #pylint: disable=too-few-public-methods
+    pyboy: Any
+    gs: Any
+    interrupt: Any
+    graph: Any
+    _release_map: dict
 
-class NavCore:
+class NavCore(_NavCoreDeps): #pylint: disable=too-few-public-methods
     """Mixin: low-level movement + state-read primitives."""
 
     FRAMES_PER_STEP       = 2    # frames to hold a direction button per tile step
@@ -29,9 +36,10 @@ class NavCore:
     WALK_ANIMATION_FRAMES = 17   # frames for a walk animation to complete
     WARP_WAIT_FRAMES      = 120  # max frames to wait for a warp transition
 
-    # ------------------------------------------------------------------
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
     # Low-level input
-    # ------------------------------------------------------------------
 
     def press(self, button, frames: int = 0) -> None:
         """Press and release a button.  Used for menus/dialogues, not movement."""
@@ -43,9 +51,7 @@ class NavCore:
         for _ in range(self.FRAMES_RELEASE):
             self.pyboy.tick()
 
-    # ------------------------------------------------------------------
     # State reads
-    # ------------------------------------------------------------------
 
     def _pos(self) -> tuple[int, int]:
         """Current player tile position as (x, y) in player-step units."""
@@ -53,7 +59,7 @@ class NavCore:
         return m["player_x"], m["player_y"]
 
     def _map_id(self) -> int:
-        return self.mem.read_byte(ADDR_MAP_ID)
+        return self.gs.mem.read_byte(ADDR_MAP_ID)
 
     def _map_name(self) -> str | None:
         """Current map as SCREAMING_SNAKE_CASE (matches WorldGraph keys)."""
@@ -64,22 +70,20 @@ class NavCore:
         Read live warp table from RAM.
         Returns list of (x, y, dest_map_id, dest_warp_idx).
         """
-        count = self.mem.read_byte(ADDR_WARP_COUNT)
+        count = self.gs.mem.read_byte(ADDR_WARP_COUNT)
         warps = []
         for i in range(count):
             base = ADDR_WARP_BASE + i * 4
-            wy = self.mem.read_byte(base)
-            wx = self.mem.read_byte(base + 1)
-            dest_warp = self.mem.read_byte(base + 2)
-            dest_map  = self.mem.read_byte(base + 3)
+            wy = self.gs.mem.read_byte(base)
+            wx = self.gs.mem.read_byte(base + 1)
+            dest_warp = self.gs.mem.read_byte(base + 2)
+            dest_map  = self.gs.mem.read_byte(base + 3)
             warps.append((wx, wy, dest_map, dest_warp))
         return warps
 
-    # ------------------------------------------------------------------
     # Collision / viewport passability
-    # ------------------------------------------------------------------
 
-    def _build_passable_fn(self):
+    def _build_passable_fn(self) -> Callable[[int, int], bool]:
         """
         Returns is_passable(world_x, world_y) -> bool.
 
@@ -94,13 +98,13 @@ class NavCore:
         Tiles outside the viewport are assumed passable (optimistic; A* learns
         the real state when the player tries to step there).
         """
-        scx = self.mem.read_byte(0xFF43)
-        scy = self.mem.read_byte(0xFF42)
+        scx = self.gs.mem.read_byte(0xFF43)
+        scy = self.gs.mem.read_byte(0xFF42)
 
         vp_tile_x = scx // 8
         vp_tile_y = (scy // 8) if scy < 128 else (scy - 256) // 8
 
-        collision = self.game.game_area_collision()  # [18 rows][20 cols]
+        collision = self.pyboy.game_wrapper.game_area_collision()  # [18 rows][20 cols]
 
         def is_passable(wx: int, wy: int) -> bool:
             tc = wx * 2 - vp_tile_x
@@ -111,9 +115,7 @@ class NavCore:
 
         return is_passable
 
-    # ------------------------------------------------------------------
     # Map transition wait
-    # ------------------------------------------------------------------
 
     def _wait_for_map_change(self, expected_map_id: int, timeout: int = 0) -> bool:
         """Tick until map ID becomes expected_map_id or timeout. Returns True on success."""
@@ -124,9 +126,23 @@ class NavCore:
                 return True
         return False
 
-    # ------------------------------------------------------------------
     # Single-step movement with interrupt hook
-    # ------------------------------------------------------------------
+
+    def _debug(self, dx: int, dy: int, pos_before: tuple[int, int, int]) -> None:
+        # Debug: log viewport and intended tile
+        scx = self.gs.mem.read_byte(0xFF43)
+        scy = self.gs.mem.read_byte(0xFF42)
+        vp_x = scx // 8
+        vp_y = scy // 8
+        collision = self.pyboy.game_wrapper.game_area_collision()
+        intended_col = (pos_before[0] + dx) - vp_x
+        intended_row = (pos_before[1] + dy) - vp_y
+        print(f"  [STEP] SCX={scx} SCY={scy} vp=({vp_x},{vp_y})")
+        print(f"  [STEP] Intended world=({pos_before[0]+dx},{pos_before[1]+dy})\
+               screen col={intended_col} row={intended_row}")
+        if 0 <= intended_row < 18 and 0 <= intended_col < 20:
+            print(f"  [STEP] collision[{intended_row}][{intended_col}]\
+                   = {collision[intended_row][intended_col]}")
 
     def _step(self, direction: str) -> bool:
         """
@@ -144,22 +160,8 @@ class NavCore:
             Propagated from InterruptHandler when a battle starts.
         """
         dx, dy, press_ev, _ = DIRECTIONS[direction]
-        x_before, y_before = self._pos()
-        facing_before = self.gs.map["player_facing"]
-
-        # Debug: log viewport and intended tile
-        scx = self.mem.read_byte(0xFF43)
-        scy = self.mem.read_byte(0xFF42)
-        vp_x = scx // 8
-        vp_y = scy // 8
-        collision = self.game.game_area_collision()
-        intended_col = (x_before + dx) - vp_x
-        intended_row = (y_before + dy) - vp_y
-        print(f"  [STEP] SCX={scx} SCY={scy} vp=({vp_x},{vp_y})")
-        print(f"  [STEP] Intended world=({x_before+dx},{y_before+dy}) screen col={intended_col} row={intended_row}")
-        if 0 <= intended_row < 18 and 0 <= intended_col < 20:
-            print(f"  [STEP] collision[{intended_row}][{intended_col}] = {collision[intended_row][intended_col]}")
-
+        pos_before = (*self._pos(), self.gs.map["player_facing"])
+        self._debug(dx, dy, pos_before)
         # First attempt
         self.pyboy.send_input(press_ev)
         for _ in range(self.FRAMES_PER_STEP):
@@ -171,11 +173,11 @@ class NavCore:
         x_after, y_after = self._pos()
         facing_after = self.gs.map["player_facing"]
 
-        if x_after == x_before + dx and y_after == y_before + dy:
+        if x_after == pos_before[0] + dx and y_after == pos_before[1] + dy:
             self.interrupt.check_and_handle()
             return True
 
-        if x_after == x_before and y_after == y_before:
+        if x_after == pos_before[0] and y_after == pos_before[1]:
             # Retry once (handles facing-change-only first press)
             self.pyboy.send_input(press_ev)
             for _ in range(self.FRAMES_PER_STEP):
@@ -185,81 +187,64 @@ class NavCore:
                 self.pyboy.tick()
             x_after, y_after = self._pos()
             facing_after = self.gs.map["player_facing"]
-            moved = x_after == x_before + dx and y_after == y_before + dy
+            moved = x_after == pos_before[0] + dx and y_after == pos_before[1] + dy
             if not moved:
-                print(f"  [STEP] Still failed after retry: pos=({x_after},{y_after}) facing={facing_after}")
+                print(f"[STEP] Still failed after retry: pos=({x_after},{y_after})\
+                       facing={facing_after}")
             self.interrupt.check_and_handle()
             return moved
 
-        print(f"  [STEP] Wrong move: {direction} from ({x_before},{y_before}) "
-              f"facing={facing_before} → ({x_after},{y_after}) facing={facing_after}")
+        print(f"  [STEP] Wrong move: {direction} from ({pos_before[0]},{pos_before[1]}) "
+              f"facing={pos_before[2]} → ({x_after},{y_after}) facing={facing_after}")
         self.interrupt.check_and_handle()
         return False
 
-    # ------------------------------------------------------------------
-    # Dodge — perpendicular detour around an NPC/sprite obstacle
-    # ------------------------------------------------------------------
+    # Dodge helpers
 
-    def _dodge(self, blocked_direction: str, goal_x: int, goal_y: int, max_dodge: int = 4) -> bool:
-        """
-        Try to navigate around a sprite obstacle by stepping perpendicular
-        to the blocked direction (biased toward the goal) then retrying.
-
-        Returns True if we successfully moved past the obstacle.
-        """
-        cx, cy = self._pos()
+    def _get_perpendicular_dirs(self, blocked_direction, pos, goal):
+        cx, cy = pos
+        goal_x, goal_y = goal
         dx_to_goal = goal_x - cx
         dy_to_goal = goal_y - cy
 
         if blocked_direction in ("left", "right"):
-            perp_dirs = ["up", "down"] if dy_to_goal <= 0 else ["down", "up"]
-        else:
-            perp_dirs = ["right", "left"] if dx_to_goal >= 0 else ["left", "right"]
+            return ["up", "down"] if dy_to_goal <= 0 else ["down", "up"]
 
-        for perp_dir in perp_dirs:
-            for dodge_step in range(1, max_dodge + 1):
-                moved = self._step(perp_dir)
-                if not moved:
-                    break
-                retry_moved = self._step(blocked_direction)
-                if retry_moved:
-                    print(f"  [DODGE] Cleared obstacle after {dodge_step} {perp_dir} step(s)")
-                    return True
+        return ["right", "left"] if dx_to_goal >= 0 else ["left", "right"]
 
-            # Undo the perpendicular steps we took
-            undo_dir = OPPOSITE[perp_dir]
-            cx_now, cy_now = self._pos()
-            if perp_dir in ("up", "down"):
-                steps_taken = abs(cy_now - cy)
-            else:
-                steps_taken = abs(cx_now - cx)
-            for _ in range(steps_taken):
-                self._step(undo_dir)
+    def _try_dodge_direction(self, perp_dir, blocked_direction, max_dodge):
+        steps_taken = 0
 
+        for step_count in range(1, max_dodge + 1):
+            if not self._step(perp_dir):
+                break
+
+            steps_taken += 1
+
+            if self._step(blocked_direction):
+                print(f"  [DODGE] Cleared obstacle after {step_count} {perp_dir} step(s)")
+                return True
+
+        self._undo_dodge(perp_dir, steps_taken)
         return False
 
-    # ------------------------------------------------------------------
-    # Direct walk — greedy fallback when A* can't plan a path
-    # ------------------------------------------------------------------
+    def _undo_dodge(self, perp_dir, steps_taken):
+        undo_dir = OPPOSITE[perp_dir]
 
-    def _direct_walk(self, goal_x: int, goal_y: int, max_steps: int = 30) -> bool:
-        """
-        Fallback for tiny indoor maps: walk directly toward goal one step at a
-        time without consulting collision.  Stops when goal is reached or the
-        player stops moving (truly stuck).
-        """
-        print(f"  [DIRECT] Fallback direct walk to ({goal_x},{goal_y})")
-        for _ in range(max_steps):
-            cx, cy = self._pos()
-            if cx == goal_x and cy == goal_y:
+        for _ in range(steps_taken):
+            self._step(undo_dir)
+
+    # Dodge — perpendicular detour around an NPC/sprite obstacle
+
+    def _dodge(self, blocked_direction: str, goal_x: int, goal_y: int, max_dodge: int = 4) -> bool:
+        cx, cy = self._pos()
+
+        perp_dirs = self._get_perpendicular_dirs(
+            blocked_direction, (cx, cy), (goal_x, goal_y)
+        )
+
+        for perp_dir in perp_dirs:
+            if self._try_dodge_direction(perp_dir, blocked_direction, max_dodge):
                 return True
-            dx = goal_x - cx
-            dy = goal_y - cy
-            direction = ("right" if dx > 0 else "left") if abs(dx) >= abs(dy) \
-                        else ("down" if dy > 0 else "up")
-            prev = self._pos()
-            self._step(direction)
-            if self._pos() == prev:
-                alt = ("down" if dy > 0 else "up") if dy != 0 else ("right" if dx > 0 else "left")
-                self._step(alt)
-        return self._pos() == (goal_x, goal_y)
+
+        return False

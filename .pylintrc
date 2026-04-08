@@ -57,7 +57,7 @@ ignore=venv,__pycache__,node_modules,.git,cloned
 # ignore-list. The regex matches against paths and can be in Posix or Windows
 # format. Because '\\' represents the directory delimiter on Windows systems,
 # it can't be used as an escape character.
-ignore-paths=project-struct.py
+ignore-paths=project-struct.py,setup-files\create_initial_savestate.py,setup-files\setup-and-test-emulator.py
 
 # Files or directories matching the regular expression patterns are skipped.
 # The regex matches against base names, not paths. The default value ignores

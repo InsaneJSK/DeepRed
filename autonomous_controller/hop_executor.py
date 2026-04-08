@@ -6,7 +6,7 @@ HopExecutor mixin — map-to-map hop execution (warp doors + map connections).
 Expects NavCore + NavAstar in the MRO:
     self.graph         — WorldGraph
     self.rom_pass      — RomPassability
-    self.mem           — MemoryReader
+    self.gs            — PokemonGameState (for RAM reads)
     self._expected_map_id  — int
     navigate_to_tile() — from NavAstar
     _step(), press()   — from NavCore
@@ -14,15 +14,36 @@ Expects NavCore + NavAstar in the MRO:
     _wait_for_map_change() — from NavCore
 """
 
+from typing import Any, Protocol
+
 from autonomous_controller.constants import DIRECTIONS, COMPASS_TO_ARROW
+from autonomous_controller.walkable_map import RomPassability
+from autonomous_controller.world_graph import WorldGraph
+from memory_state.game_state import PokemonGameState
 
+class _HopExectorDeps(Protocol):
+    graph: WorldGraph
+    gs: PokemonGameState
+    rom_pass: RomPassability
+    _expected_map_id: int
 
-class HopExecutor:
+    def navigate_to_tile( #pylint: ignore: disable=missing-function-docstring
+            self,
+            x: int,
+            y: int,
+            forbidden_tiles: set[tuple[int, int]] | None = None) -> bool: ...
+    def _step(self, direction: str) -> bool: ...
+    def press(self, event: Any) -> None: ... #pylint: ignore: disable=missing-function-docstring
+    def _pos(self) -> tuple[int, int]: ...
+    def _map_id(self) -> int: ...
+    def _map_name(self) -> str | None: ...
+    def _current_warps_from_ram(self) -> list[tuple[int, int, int, int]]: ...
+    def _wait_for_map_change(self, expected_map_id: int, timeout_ms: int = 5000) -> bool: ...
+
+class HopExecutor(_HopExectorDeps):
     """Mixin: warp-hop, connection-hop, and single-edge hop dispatch."""
 
-    # ------------------------------------------------------------------
     # Warp hop
-    # ------------------------------------------------------------------
 
     def _execute_warp_hop(self, warp: dict, dst_map: str) -> bool:
         """
@@ -34,7 +55,7 @@ class HopExecutor:
         or trigger nothing at all.
         """
         dest_map_id = self.graph.map_id(dst_map)
-        self._expected_map_id = self._map_id()
+        self._expected_map_id = self._map_id() #pylint: ignore: disable=assignment-from-no-return
         if dest_map_id is None:
             print(f"  [WARP] {dst_map} has no ID in world graph")
             return False
@@ -46,7 +67,7 @@ class HopExecutor:
             approach_x = warp_x - dx
             approach_y = warp_y - dy
             self.navigate_to_tile(approach_x, approach_y)
-            cx, cy = self._pos()
+            cx, cy = self._pos() #pylint: disable=assignment-from-no-return, disable=unpacking-non-sequence
             if cx != approach_x or cy != approach_y:
                 print(f"  [WARP] Couldn't reach approach ({approach_x},{approach_y}) "
                       f"for {direction}, at ({cx},{cy})")
@@ -57,11 +78,9 @@ class HopExecutor:
 
         return self._wait_for_map_change(dest_map_id)
 
-    # ------------------------------------------------------------------
     # Connection-border helpers
-    # ------------------------------------------------------------------
 
-    def _scan_border_avoiding_warps(
+    def _scan_border_avoiding_warps( #pylint: disable=too-many-arguments, disable=too-many-locals, too-many-positional-arguments
         self,
         arrow_dir: str,
         cx: int,
@@ -104,11 +123,9 @@ class HopExecutor:
                     return border_x, py
         return None
 
-    # ------------------------------------------------------------------
     # Connection hop
-    # ------------------------------------------------------------------
 
-    def _execute_connection_hop(self, arrow_dir: str, dst_map: str) -> bool:
+    def _execute_connection_hop(self, arrow_dir: str, dst_map: str) -> bool: #pylint: disable=too-many-locals, disable=too-many-branches, disable=too-many-statements
         """
         Walk from the current map to an adjacent map via a map connection
         (open border, not a warp door).
@@ -122,18 +139,18 @@ class HopExecutor:
         map_h / map_w (from 0xD368/0xD369) are in player-step units.
         """
         dst_map_id   = self.graph.map_id(dst_map)
-        start_map_id = self._map_id()
-        dx, dy, press_ev, _ = DIRECTIONS[arrow_dir]
-        cx, cy = self._pos()
-        src_map = self._map_name()
+        start_map_id = self._map_id() #pylint: disable=assignment-from-no-return
+        _, _, press_ev, _ = DIRECTIONS[arrow_dir]
+        cx, cy = self._pos() #pylint: disable=assignment-from-no-return, disable=unpacking-non-sequence
+        src_map = self._map_name() #pylint: disable=assignment-from-no-return
 
-        map_h = self.mem.read_byte(0xD368)   # player-step units
-        map_w = self.mem.read_byte(0xD369)   # player-step units
+        map_h = self.gs.mem.read_byte(0xD368)   # player-step units
+        map_w = self.gs.mem.read_byte(0xD369)   # player-step units
 
         # Collect live warp positions so A* avoids them (stepping on a warp
         # during connection navigation teleports the player into a building).
         warp_tiles: set[tuple[int, int]] = set()
-        for wx, wy, _, _ in self._current_warps_from_ram():
+        for wx, wy, _, _ in self._current_warps_from_ram(): #pylint: disable=not-an-iterable
             warp_tiles.add((wx, wy))
 
         # Pick the nearest walkable tile on the border strip via ROM lookup
@@ -191,7 +208,7 @@ class HopExecutor:
         print(f"  [CONN] Navigating to border tile ({border_x},{border_y}), "
               f"avoiding {len(warp_tiles)} warp(s)")
         self._expected_map_id = start_map_id
-        nav_ok = self.navigate_to_tile(border_x, border_y, forbidden_tiles=warp_tiles)
+        nav_ok = self.navigate_to_tile(border_x, border_y, forbidden_tiles=warp_tiles) #pylint: disable=assignment-from-no-return
 
         # Check if we already crossed (map transition fired mid-walk)
         if self._map_id() == dst_map_id:
@@ -199,11 +216,11 @@ class HopExecutor:
 
         # Fallback: re-scan from the actual failure position
         if not nav_ok and self._map_id() == start_map_id:
-            cx2, cy2 = self._pos()
-            src_map2 = self._map_name()
+            cx2, cy2 = self._pos() #pylint: disable=assignment-from-no-return, disable=unpacking-non-sequence
+            src_map2 = self._map_name() #pylint: disable=assignment-from-no-return
             print(f"  [CONN] Nav failed at ({cx2},{cy2}); re-scanning strip from failure point")
             fb = self._scan_border_avoiding_warps(
-                arrow_dir, cx2, cy2, src_map2 or src_map, map_h, map_w, warp_tiles,
+                arrow_dir, cx2, cy2, src_map2 or src_map, map_h, map_w, warp_tiles,  # type: ignore
                 exclude={(border_x, border_y)},  # never re-try the same tile
             )
             if fb is not None:
@@ -214,7 +231,7 @@ class HopExecutor:
                 if self._map_id() == dst_map_id:
                     return True
             else:
-                print("  [CONN] Fallback strip scan found no reachable tile (tried all non-warp blocks)")
+                print("[CONN] Fallback strip scan find no reachable tile (tried all non-warps)")
 
         # Walk off the edge — keep pressing the direction until map changes
         for _ in range(10):
@@ -225,9 +242,7 @@ class HopExecutor:
         print(f"  [CONN] Failed to cross border into {dst_map}")
         return False
 
-    # ------------------------------------------------------------------
     # Hop dispatch
-    # ------------------------------------------------------------------
 
     def _execute_hop(self, src_map: str, dst_map: str) -> bool:
         """Determine edge type (warp vs connection) and execute one map→map hop."""

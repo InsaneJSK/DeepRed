@@ -11,7 +11,7 @@ def _heuristic(ax: int, ay: int, bx: int, by: int) -> int:
     return abs(ax - bx) + abs(ay - by)
 
 
-def astar(
+def astar( #pylint: disable=too-many-arguments, too-many-locals, too-many-positional-arguments
     start_x: int, start_y: int,
     goal_x: int,  goal_y: int,
     is_passable_fn,
@@ -24,7 +24,7 @@ def astar(
     Returns list of direction strings ("up"/"down"/"left"/"right"), or None
     if no path exists within max_steps node expansions.
     """
-    from autonomous_controller.constants import DIRECTIONS  # local import avoids cycle
+    from autonomous_controller.constants import DIRECTIONS  # local import avoids cycle #pylint: disable=import-outside-toplevel
 
     open_heap = [(_heuristic(start_x, start_y, goal_x, goal_y), 0, start_x, start_y, [])]
     visited: set[tuple[int, int]] = set()

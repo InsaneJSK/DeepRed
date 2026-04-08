@@ -8,8 +8,10 @@ warp/connection lookups.
 import json
 from collections import deque
 
-
 class WorldGraph:
+    """
+    Loads world_graph.json and provides BFS routing, warp/connection lookups.
+    """
     def __init__(self, graph_path: str):
         with open(graph_path, encoding="utf-8") as f:
             data = json.load(f)
@@ -20,18 +22,23 @@ class WorldGraph:
         }
 
     def map_name(self, map_id: int) -> str | None:
+        """Returns map name for given map ID, or None if not found."""
         return self.id_to_name.get(map_id)
 
     def map_id(self, map_name: str) -> int | None:
+        """Returns map ID for given map name, or None if not found."""
         return self.name_to_id.get(map_name.upper())
 
     def warps(self, map_name: str) -> list[dict]:
+        """Returns list of warps on given map, or empty list if map not found."""
         return self.maps.get(map_name.upper(), {}).get("warps", [])
 
     def connections(self, map_name: str) -> dict:
+        """Returns dictionary of connections for given map, or empty dict if map not found."""
         return self.maps.get(map_name.upper(), {}).get("connections", {})
 
     def neighbors(self, map_name: str) -> list[str]:
+        """Returns list of neighboring map names (via warps or connections)."""
         result = []
         for warp in self.warps(map_name):
             result.append(warp["dest_map"])

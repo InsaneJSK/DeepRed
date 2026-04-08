@@ -38,7 +38,6 @@ Usage
 
 from pyboy.utils import WindowEvent  # pylint: disable=no-name-in-module
 
-from autonomous_controller.constants       import DIRECTIONS
 from autonomous_controller.world_graph     import WorldGraph
 from autonomous_controller.walkable_map    import RomPassability
 from autonomous_controller.interrupt_handler import InterruptHandler, BattleInterrupt
@@ -47,7 +46,7 @@ from autonomous_controller.nav_astar       import NavAstar
 from autonomous_controller.hop_executor    import HopExecutor
 
 
-class AutonomousController(NavCore, NavAstar, HopExecutor):
+class AutonomousController(NavCore, NavAstar, HopExecutor): #pylint: disable=too-many-ancestors
     """
     High-level autonomous navigation controller for Pokemon Red.
 
@@ -70,11 +69,10 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):
         graph_path    : path to world_graph.json
         pokered_root  : path to cloned pret/pokered repo (for ROM passability)
         """
+        super().__init__()
         self.pyboy    = pyboy
         self.gs       = game_state       # PokemonGameState
-        self.mem      = game_state.mem   # MemoryReader (reuse, no duplicate)
         self.graph    = WorldGraph(graph_path)
-        self.game     = pyboy.game_wrapper
         self.rom_pass = RomPassability(pokered_root)
         self.interrupt = InterruptHandler(pyboy, game_state)
 

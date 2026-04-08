@@ -188,7 +188,7 @@ def _parse_map_tilesets(pokered_root: Path) -> dict[str, str]:
 
 # Manual overrides for maps whose .blk name doesn't match a simple camel-case
 # conversion of the map constant.  Key = MAP_CONSTANT, value = blk stem.
-_BLK_OVERRIDES: dict[str, str] = {
+_BLK_OVERRIDES: dict[str, str | None] = {
     "UNDERGROUND_PATH_NORTH_SOUTH": "UndergroundPathNorthSouth",
     "UNDERGROUND_PATH_WEST_EAST":   "UndergroundPathWestEast",
     "UNDERGROUND_PATH_ROUTE_5":     "UndergroundPathRoute5",
@@ -405,10 +405,12 @@ class RomPassability:
 
         if axis == "x":
             candidates = range(w)
-            def check(v): return self.is_passable(map_name, bx=v, by=strip_index)
+            def check(v):
+                return self.is_passable(map_name, bx=v, by=strip_index)
         else:  # axis == "y"
             candidates = range(h)
-            def check(v): return self.is_passable(map_name, bx=strip_index, by=v)
+            def check(v):
+                return self.is_passable(map_name, bx=strip_index, by=v)
 
         # Sort candidate coordinates by distance from scan_coord
         sorted_cands = sorted(candidates, key=lambda v: abs(v - scan_coord))

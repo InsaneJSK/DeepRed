@@ -261,7 +261,6 @@ class Tileset(IntEnum):
     PLATEAU = 0x17
 
 if __name__ == "__main__":
-    """Test the enums"""
     print("Testing Map IDs:")
     vals = [0, 1, 2, 3, 4, 61]
     for name, value in MapLocation.__members__.items():
