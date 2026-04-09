@@ -12,6 +12,7 @@ from typing import Protocol, Callable
 
 from autonomous_controller.constants import DIRECTIONS
 from autonomous_controller.pathfinder import astar
+from autonomous_controller.interrupt_handler import InterruptHandler
 
 class _NavAstarDeps(Protocol): #pylint: disable=too-few-public-methods
     def _step(self, direction: str) -> bool: ...
@@ -20,6 +21,7 @@ class _NavAstarDeps(Protocol): #pylint: disable=too-few-public-methods
     def _map_id(self) -> int: ...
     def _build_passable_fn(self) -> Callable[[int, int], bool]: ...
     _expected_map_id: int
+    interrupt: InterruptHandler
 
 class NavAstar(_NavAstarDeps): #pylint: disable=too-few-public-methods
     """Mixin: navigate_to_tile with oscillation/escape handling."""
@@ -190,6 +192,14 @@ class NavAstar(_NavAstarDeps): #pylint: disable=too-few-public-methods
         intended = (cx + ddx, cy + ddy)
 
         moved = self._step(direction) #pylint: disable=assignment-from-no-return
+
+        # NPC scripted movement displaced the player — interrupt handler already
+        # waited for the position to stabilise.  Skip _dodge (it would push us
+        # further from the goal) and re-plan A* from the actual new position.
+        if getattr(self, 'interrupt', None) and self.interrupt.was_displaced:
+            self.interrupt.was_displaced = False
+            print("  [NAV] NPC displaced player — re-planning A* from new position")
+            return True   # signals navigate_to_tile to `continue`
 
         if moved:
             return False

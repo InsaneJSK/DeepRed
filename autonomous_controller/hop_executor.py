@@ -214,6 +214,13 @@ class HopExecutor(_HopExectorDeps):
         if self._map_id() == dst_map_id:
             return True
 
+        # If we're on NEITHER the source map NOR the destination (NPC displaced us),
+        # abort immediately — no point running the fallback or border-press loop.
+        current_map_id = self._map_id() #pylint: disable=assignment-from-no-return
+        if current_map_id not in (start_map_id, dst_map_id):
+            print(f"  [CONN] Displaced to '{self._map_name()}' — aborting hop")
+            return False
+
         # Fallback: re-scan from the actual failure position
         if not nav_ok and self._map_id() == start_map_id:
             cx2, cy2 = self._pos() #pylint: disable=assignment-from-no-return, disable=unpacking-non-sequence
@@ -231,7 +238,7 @@ class HopExecutor(_HopExectorDeps):
                 if self._map_id() == dst_map_id:
                     return True
             else:
-                print("[CONN] Fallback strip scan find no reachable tile (tried all non-warps)")
+                print("[CONN] Fallback strip scan found no reachable tile (tried all non-warps)")
 
         # Walk off the edge — keep pressing the direction until map changes
         for _ in range(10):

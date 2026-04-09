@@ -20,4 +20,7 @@ with open("saves\\in-room-start.state", "rb") as f:
 gs = PokemonGameState(state)
 controller = AutonomousController(state, gs, "world_graph.json")
 
-controller.go_to("VIRIDIAN_CITY")
+ok = controller.go_to("ROUTE_1")
+if not ok and gs.to_dict()['map_name'] == "OAKS_LAB":
+    controller.pick_starter("bulbasaur")
+    controller.go_to("ROUTE_1")   # re-call after starter
