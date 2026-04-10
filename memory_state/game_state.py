@@ -323,7 +323,7 @@ if __name__ == "__main__":
     pyboy.tick()
     # game = game_wrapper
     # load your save in the room
-    with open("saves/in-room-start.state", "rb") as f:
+    with open("saves/oak-room-battle.state", "rb") as f:
         pyboy.load_state(f)
 
     state = PokemonGameState(pyboy)

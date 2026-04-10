@@ -6,7 +6,7 @@ from pyboy import PyBoy
 
 pyboy = PyBoy("Pokemon_Red\\Red.gb", window="SDL2")
 
-with open("saves\\in-room-start.state", "rb") as f:
+with open("saves\\oak-room-battle.state", "rb") as f:
     pyboy.load_state(f)
 # Iteratively saved the state until player is in room
 
@@ -15,7 +15,7 @@ for _ in range(600):
     pyboy.tick()
 
 # Save state correctly
-with open("saves\\in-room-start.state", "wb") as f:
+with open("saves\\oak-room-battle.state", "wb") as f:
     pyboy.save_state(f)
 
 pyboy.stop()

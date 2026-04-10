@@ -9,5 +9,6 @@ or:
 
 from autonomous_controller.controller import AutonomousController
 from autonomous_controller.interrupt_handler import BattleInterrupt
+from autonomous_controller.battle_controller import BattleController
 
-__all__ = ["AutonomousController", "BattleInterrupt"]
+__all__ = ["AutonomousController", "BattleInterrupt", "BattleController"]
