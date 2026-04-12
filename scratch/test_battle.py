@@ -2,11 +2,19 @@ import sys
 from pyboy import PyBoy
 from pyboy.utils import WindowEvent
 from memory_state.game_state import PokemonGameState
+import keyboard
 
-pyboy = PyBoy('Pokemon_Red/Red.gb', window='null')
+pyboy = PyBoy('Pokemon_Red/Red.gb')
 pyboy.tick()
 pyboy.load_state(open('saves/oak-room-battle.state', 'rb'))
 gs = PokemonGameState(pyboy)
+
+ctr = 0
+while not keyboard.is_pressed('space'):
+    pyboy.tick()
+    ctr += 1
+    if not ctr % 100:
+        print(gs.dialog)
 
 print("Starting to wait for battle...")
 for ticks in range(3000):
