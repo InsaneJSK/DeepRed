@@ -23,8 +23,7 @@ for ticks in range(3000):
         pyboy.send_input(WindowEvent.PRESS_BUTTON_A)
         pyboy.tick()
         pyboy.send_input(WindowEvent.RELEASE_BUTTON_A)
-    
-    if 'FIGHT' in gs.dialog and 'PKMN' in gs.dialog:
+    if 'FIGHT' in gs.to_dict() and 'PKMN' in gs.dialog:
         print(f"Reached battle menu at tick {ticks}")
         print("====== DIALOG ======")
         print(repr(gs.dialog))
