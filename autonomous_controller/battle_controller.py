@@ -1,227 +1,386 @@
 """
 autonomous_controller/battle_controller.py
 
-BattleController --- handles autonomous menu navigation during battles.
+BattleController — RAM-driven battle menu navigation for Pokemon Red.
+
+All menu state is read from RAM directly (no dialog scraping).
+
+RAM addresses (verified against pret/pokered wram.asm + diagnostic):
+    0xCC26  wCurrentMenuItem        current cursor in the active menu (0-indexed)
+    0xCC29  wBattleAndStartSaved    main-menu cursor saved when sub-menu opens
+    0xCC2A  wCurrentMoveNum         move slot selected in FIGHT sub-menu (0-indexed)
+    0xCC2E  wPlayerMonNumber        active party Pokémon slot (0-indexed)
+    0xCCD5  wBattleTurnSide         3=player's turn / choosing, 4=enemy turn / anim
+    0xD013  wBattleResult           0=win, 1=lose, 2=draw (valid after battle ends)
+    0xD057  wIsInBattle             0=none, 1=wild, 2=trainer
+    0xD05A  wBattleType             0=normal, 1=old man, 2=safari
+
+Main battle menu layout (2×2 grid):
+    FIGHT(0) | PKMN(1)
+    ----------+--------
+    ITEM(2)  | RUN(3)
+
+    Row  = index // 2   (0=top, 1=bottom)
+    Col  = index  % 2   (0=left, 1=right)
+    RIGHT ↔ toggles column, DOWN ↔ toggles row.
+
+Usage (from AI agent):
+    bc = BattleController(pyboy, gs)
+    bc.fight(move_index=0)          # use first move in move list
+    bc.wait_for_turn()              # block until next player turn
+    bc.run()                        # try to run
+    bc.switch(party_index=1)        # switch to second party slot
+    bc.use_item(bag_index=0)        # use first item in bag
 """
 
-from typing import Optional
 from pyboy.utils import WindowEvent  # pylint: disable=no-name-in-module
-from autonomous_controller.nav_core import NavCore
 
-class BattleController(NavCore):
+# ---------------------------------------------------------------------------
+# RAM addresses (verified against pret/pokered + live diagnostic)
+# ---------------------------------------------------------------------------
+_MENU_CURSOR      = 0xCC26  # wCurrentMenuItem  — cursor in current menu
+_SAVED_CURSOR     = 0xCC29  # wBattleAndStartSavedMenuItem
+_MOVE_CURSOR      = 0xCC2A  # wCurrentMoveNum   — move slot in FIGHT sub-menu
+_PLAYER_MON_SLOT  = 0xCC2E  # wPlayerMonNumber  — active party slot (0-indexed)
+_BATTLE_TURN_SIDE = 0xCCD5  # NOT reliable as a turn-indicator (varies by frame)
+_IS_IN_BATTLE     = 0xD057  # wIsInBattle: 0=none, 1=wild, 2=trainer
+_BATTLE_TYPE      = 0xD05A  # wBattleType: 0=normal, 1=old man, 2=safari
+
+# Main battle menu option indices
+FIGHT = 0
+PKMN  = 1
+ITEM  = 2
+RUN   = 3
+
+# Player-turn sentinel (wBattleTurnSide == 3 means battle menu is showing)
+_PLAYER_TURN_VALUE  = 3
+# How often (in ticks) to press A while waiting for the menu (advances text)
+_TEXT_ADVANCE_EVERY = 20
+
+
+class BattleController:
     """
-    High-level agent to navigate Battle menus using `gs.dialog`.
-    Requires the game state to ensure `in_battle` is true.
+    RAM-driven navigation of Pokemon Red battle menus.
+
+    No dialog scraping — every state query reads a specific WRAM address.
     """
+
+    # Ticks to hold a button press
+    PRESS_FRAMES   = 3
+    # Ticks to settle between presses
+    SETTLE_FRAMES  = 8
+    # Ticks to wait for the screen to settle after opening a sub-menu
+    SUBMENU_SETTLE = 30
+    # Max ticks for wait_for_turn() (~10 s at 60 fps — covers long animations)
+    TURN_TIMEOUT   = 600
 
     def __init__(self, pyboy, game_state):
-        super().__init__()
         self.pyboy = pyboy
-        self.gs = game_state
+        self.gs    = game_state
+
         self._release_map = {
-            WindowEvent.PRESS_ARROW_UP:     WindowEvent.RELEASE_ARROW_UP,
-            WindowEvent.PRESS_ARROW_DOWN:   WindowEvent.RELEASE_ARROW_DOWN,
-            WindowEvent.PRESS_ARROW_LEFT:   WindowEvent.RELEASE_ARROW_LEFT,
-            WindowEvent.PRESS_ARROW_RIGHT:  WindowEvent.RELEASE_ARROW_RIGHT,
-            WindowEvent.PRESS_BUTTON_A:     WindowEvent.RELEASE_BUTTON_A,
-            WindowEvent.PRESS_BUTTON_B:     WindowEvent.RELEASE_BUTTON_B,
-            WindowEvent.PRESS_BUTTON_START: WindowEvent.RELEASE_BUTTON_START,
+            WindowEvent.PRESS_ARROW_UP:    WindowEvent.RELEASE_ARROW_UP,
+            WindowEvent.PRESS_ARROW_DOWN:  WindowEvent.RELEASE_ARROW_DOWN,
+            WindowEvent.PRESS_ARROW_LEFT:  WindowEvent.RELEASE_ARROW_LEFT,
+            WindowEvent.PRESS_ARROW_RIGHT: WindowEvent.RELEASE_ARROW_RIGHT,
+            WindowEvent.PRESS_BUTTON_A:    WindowEvent.RELEASE_BUTTON_A,
+            WindowEvent.PRESS_BUTTON_B:    WindowEvent.RELEASE_BUTTON_B,
         }
 
-    def _wait_for_menu(self, expected_words: list[str], max_ticks=300) -> bool:
-        """Wait until specific words appear in the dialog, indicating the menu is ready."""
-        for _ in range(max_ticks):
-            dialog = self.gs.dialog.upper()
-            if all(word in dialog for word in expected_words):
-                return True
+    # ------------------------------------------------------------------
+    # RAM helpers
+    # ------------------------------------------------------------------
+
+    def _r(self, addr: int) -> int:
+        """Read one byte from WRAM."""
+        return self.gs.mem.read_byte(addr)
+
+    def _tick(self, n: int = 1) -> None:
+        for _ in range(n):
             self.pyboy.tick()
+
+    def _press(self, btn: WindowEvent) -> None:
+        """Hold *btn* for PRESS_FRAMES ticks then release and settle."""
+        self.pyboy.send_input(btn)
+        self._tick(self.PRESS_FRAMES)
+        self.pyboy.send_input(self._release_map[btn])
+        self._tick(self.SETTLE_FRAMES)
+
+    def _press_a(self) -> None:
+        self._press(WindowEvent.PRESS_BUTTON_A)
+
+    def _press_b(self) -> None:
+        self._press(WindowEvent.PRESS_BUTTON_B)
+
+    # ------------------------------------------------------------------
+    # State queries
+    # ------------------------------------------------------------------
+
+    def is_in_battle(self) -> bool:
+        """True while the battle flag is set."""
+        return self._r(_IS_IN_BATTLE) != 0
+
+    def is_wild_battle(self) -> bool:
+        """True when fighting a wild Pokémon (wIsInBattle == 1)."""
+        return self._r(_IS_IN_BATTLE) == 1
+
+    def is_player_turn(self) -> bool:
+        """
+        True when the main FIGHT/PKMN/ITEM/RUN battle menu is visible.
+
+        Detected via dialog (VRAM tilemap): both "FIGHT" and "RUN" appear
+        on-screen only when the 2×2 main battle menu is drawn.  They are
+        absent during text boxes, move selection, party screen, and bag.
+
+        (wBattleTurnSide / 0xCCD5 turned out to not reliably indicate
+        player-turn state across different battle encounters.)
+        """
+        if self._r(_IS_IN_BATTLE) == 0:
+            return False
+        d = self.gs.dialog.upper()
+        return "FIGHT" in d and "RUN" in d
+
+    def menu_cursor(self) -> int:
+        """Current cursor position in the active menu (0-indexed)."""
+        return self._r(_MENU_CURSOR)
+
+    def move_cursor(self) -> int:
+        """Current move slot cursor in the FIGHT sub-menu (0-indexed)."""
+        return self._r(_MOVE_CURSOR)
+
+    def active_mon_slot(self) -> int:
+        """Index of the player's currently active Pokémon (0-indexed)."""
+        return self._r(_PLAYER_MON_SLOT)
+
+    # ------------------------------------------------------------------
+    # Waiting
+    # ------------------------------------------------------------------
+
+    def wait_for_turn(self, timeout: int | None = None) -> bool:
+        """
+        Block until the player's MAIN battle menu is ready (CCD5 == 3).
+
+        While CCD5 != 3, presses B every _TEXT_ADVANCE_EVERY ticks.
+
+        Why B and not A
+        ---------------
+        B advances text boxes in Pokemon Red (the text routine accepts A or B),
+        BUT B cannot select battle menu options.  Pressing A risks accidentally
+        choosing FIGHT or a move if the A press lands on the frame the menu
+        appears.  B is completely safe at every battle state:
+          - Text box visible  → B advances the text
+          - Main battle menu  → B does nothing (can't back out of battle)
+          - Sub-menu open     → B closes the sub-menu (also fine)
+          - HP/move animation → B is ignored (animation plays out)
+
+        Because we exclusively press B (never A) while waiting, CCD5 == 3 is
+        unambiguous — no sub-menu can be open — so no extra B-dismissal step
+        is needed.
+        """
+        limit = timeout if timeout is not None else self.TURN_TIMEOUT
+
+        for tick in range(limit):
+            self._tick()
+
+            if self.is_player_turn():
+                # B-only pressing guarantees we never opened a sub-menu,
+                # so CCD5 == 3 means the main battle menu is showing.
+                # Settle briefly and confirm.
+                self._tick(self.SUBMENU_SETTLE)
+                if self.is_player_turn():
+                    return True
+
+            else:
+                # Advance text / wait through animations using B.
+                if tick % _TEXT_ADVANCE_EVERY == 0:
+                    self.pyboy.send_input(WindowEvent.PRESS_BUTTON_B)
+                    self._tick(self.PRESS_FRAMES)
+                    self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_B)
+                    self._tick(self.SETTLE_FRAMES)
+
         return False
 
-    def _back_to_main_menu(self) -> bool:
-        """Press B until the main menu (FIGHT, PKMN, ITEM, RUN) shows up."""
-        for _ in range(10): # try up to 10 B presses
-            if self._wait_for_menu(["FIGHT", "PKMN"], max_ticks=30):
-                return True
-            self.press(WindowEvent.PRESS_BUTTON_B, frames=2)
-            for _ in range(20):
-                self.pyboy.tick()
-        return self._wait_for_menu(["FIGHT", "PKMN"], max_ticks=30)
+    # ------------------------------------------------------------------
+    # Main battle menu navigation (2×2 grid)
+    # ------------------------------------------------------------------
 
-    def _find_cursor_index_and_target_index(self, dialog_lines: list[str], target_name: str, 
-                                            ignore_empty=True) -> tuple[int, int]:
+    def _navigate_main_menu(self, target: int) -> None:
         """
-        Parses dialog lines. Finds the 0-indexed row of '►' and the 0-indexed row of `target_name`.
-        Returns (cursor_index, target_index). Returns (-1, -1) if unable to find target.
+        Move the cursor to *target* (0=FIGHT, 1=PKMN, 2=ITEM, 3=RUN).
+
+        Layout:
+            FIGHT(0) | PKMN(1)
+            ITEM(2)  | RUN(3)
+
+        Always resets to FIGHT (top-left) first with UP+LEFT, then navigates
+        to the target.  This avoids the remembered-cursor problem.
         """
-        # Filter out empty lines if needed
-        if ignore_empty:
-            dialog_lines = [line for line in dialog_lines if line.strip()]
+        # Reset to FIGHT (top-left corner) — UP and LEFT each wrap within
+        # their axis, so 1 press each is enough for a 2×2 grid.
+        self._press(WindowEvent.PRESS_ARROW_UP)
+        self._press(WindowEvent.PRESS_ARROW_LEFT)
 
-        cursor_index = -1
-        target_index = -1
-
-        for i, line in enumerate(dialog_lines):
-            line_upper = line.upper()
-            if '►' in line_upper:
-                cursor_index = i
-            if target_name.upper() in line_upper:
-                target_index = i
-                
-        return cursor_index, target_index
-
-    def _navigate_list_vertical(self, current_idx: int, target_idx: int):
-        """Press Up/Down to move the cursor to the target index."""
-        if current_idx == -1 or target_idx == -1:
+        if target == FIGHT:
             return
 
-        diff = target_idx - current_idx
-        if diff > 0:
-            for _ in range(diff):
-                self.press(WindowEvent.PRESS_ARROW_DOWN, frames=2)
-                for _ in range(10): self.pyboy.tick()
-        elif diff < 0:
+        tgt_row, tgt_col = target // 2, target % 2
+        if tgt_col == 1:
+            self._press(WindowEvent.PRESS_ARROW_RIGHT)
+        if tgt_row == 1:
+            self._press(WindowEvent.PRESS_ARROW_DOWN)
+
+    # ------------------------------------------------------------------
+    # Move sub-menu navigation (vertical list, 0-3)
+    # ------------------------------------------------------------------
+
+    def _navigate_move_menu(self, target: int) -> None:
+        """
+        Navigate the FIGHT move list to *target* (0-indexed from the top).
+
+        Gen 1 remembers the last-used move cursor, so the sub-menu can open
+        at any position.  We always reset to the top of the list first (3×UP
+        covers any 4-move list), then press DOWN *target* times.
+        """
+        # Reset to top
+        for _ in range(3):
+            self._press(WindowEvent.PRESS_ARROW_UP)
+        # Navigate down to target
+        for _ in range(target):
+            self._press(WindowEvent.PRESS_ARROW_DOWN)
+
+    # ------------------------------------------------------------------
+    # Back to main menu
+    # ------------------------------------------------------------------
+
+    def _back_to_main_menu(self) -> bool:
+        """
+        Ensure the main battle menu is showing.
+
+        If already there, returns immediately.  Otherwise calls wait_for_turn()
+        which will advance any remaining text and return when menu is ready.
+        """
+        if self.is_player_turn():
+            return True
+        return self.wait_for_turn()
+
+
+
+    # ------------------------------------------------------------------
+    # Public battle actions
+    # ------------------------------------------------------------------
+
+    def fight(self, move_index: int) -> bool:
+        """
+        Select FIGHT and use move at *move_index* (0-indexed, 0=first move).
+
+        Returns True if the inputs were sent successfully.
+        Call wait_for_turn() afterwards to block until the next player turn.
+        """
+        if not self.is_in_battle():
+            print("[BATTLE] fight(): not in battle.")
+            return False
+
+        if not self._back_to_main_menu():
+            print("[BATTLE] fight(): could not reach main battle menu.")
+            return False
+
+        # Navigate to FIGHT (top-left = 0)
+        self._navigate_main_menu(FIGHT)
+        self._press_a()
+        self._tick(self.SUBMENU_SETTLE)
+
+        # Navigate move list
+        self._navigate_move_menu(move_index)
+        self._press_a()
+        print(f"[BATTLE] fight(move_index={move_index}) sent.")
+        return True
+
+    def switch(self, party_index: int) -> bool:
+        """
+        Select PKMN and switch to *party_index* (0-indexed party slot).
+
+        Returns True if inputs were sent.  Call wait_for_turn() afterwards.
+        """
+        if not self.is_in_battle():
+            print("[BATTLE] switch(): not in battle.")
+            return False
+
+        if not self._back_to_main_menu():
+            print("[BATTLE] switch(): could not reach main battle menu.")
+            return False
+
+        self._navigate_main_menu(PKMN)
+        self._press_a()
+        self._tick(self.SUBMENU_SETTLE)
+
+        # Navigate vertical party list to party_index
+        for _attempt in range(4):
+            current = self.menu_cursor()
+            if current == party_index:
+                break
+            diff = party_index - current
+            btn  = WindowEvent.PRESS_ARROW_DOWN if diff > 0 else WindowEvent.PRESS_ARROW_UP
             for _ in range(abs(diff)):
-                self.press(WindowEvent.PRESS_ARROW_UP, frames=2)
-                for _ in range(10): self.pyboy.tick()
+                self._press(btn)
 
-    def fight(self, move_name: str) -> bool:
-        """
-        Select 'FIGHT', choose `move_name`, and execute it.
-        Returns True if successful, False if move wasn't found or an error occurred.
-        """
-        if not self.gs.map.get("in_battle"):
-            print("[BATTLE] Not in battle.")
-            return False
+        self._press_a()   # open Pokémon sub-menu (SHIFT / STATS / CANCEL)
+        self._tick(self.SUBMENU_SETTLE)
 
-        if not self._back_to_main_menu():
-            print("[BATTLE] Could not reach main battle menu.")
-            return False
-
-        # In main menu, 'FIGHT' is top-left.
-        # Press UP/LEFT to assure cursor is on FIGHT.
-        self.press(WindowEvent.PRESS_ARROW_UP, frames=2)
-        self.press(WindowEvent.PRESS_ARROW_LEFT, frames=2)
-        for _ in range(10): self.pyboy.tick()
-
-        # Press A to select FIGHT
-        self.press(WindowEvent.PRESS_BUTTON_A, frames=2)
-        
-        # Wait for moves to appear. A move menu shouldn't contain "PKMN" or "RUN"
-        # We wait for the screen to settle.
-        for _ in range(30): self.pyboy.tick()
-
-        # Try to find the move in the dialog list
-        dialog_lines = self.gs.dialog.strip().split('\n')
-        cursor_idx, target_idx = self._find_cursor_index_and_target_index(dialog_lines, move_name)
-
-        if target_idx == -1:
-            print(f"[BATTLE] Move '{move_name}' not found in menu.")
-            return False
-
-        self._navigate_list_vertical(cursor_idx, target_idx)
-        
-        # Press A to use the move
-        self.press(WindowEvent.PRESS_BUTTON_A, frames=2)
-        
-        # Wait for the action to start (dialog should clear or change)
-        for _ in range(30): self.pyboy.tick()
-        print(f"[BATTLE] Executed fight({move_name}).")
+        # SHIFT is the first option — navigate up to ensure cursor is there
+        self._press(WindowEvent.PRESS_ARROW_UP)
+        self._press_a()
+        print(f"[BATTLE] switch(party_index={party_index}) sent.")
         return True
 
-    def pkmn(self, pokemon_name: str) -> bool:
+    def use_item(self, bag_index: int) -> bool:
         """
-        Select 'PKMN', choose `pokemon_name`, and bring it out.
+        Select ITEM and use the item at *bag_index* (0-indexed bag slot).
+
+        Returns True if inputs were sent.  Call wait_for_turn() afterwards.
         """
+        if not self.is_in_battle():
+            print("[BATTLE] use_item(): not in battle.")
+            return False
+
         if not self._back_to_main_menu():
+            print("[BATTLE] use_item(): could not reach main battle menu.")
             return False
 
-        # Move to PKMN: from FIGHT (top-left), press RIGHT
-        self.press(WindowEvent.PRESS_ARROW_UP, frames=2)
-        self.press(WindowEvent.PRESS_ARROW_LEFT, frames=2)
-        self.press(WindowEvent.PRESS_ARROW_RIGHT, frames=2)
-        for _ in range(10): self.pyboy.tick()
+        self._navigate_main_menu(ITEM)
+        self._press_a()
+        self._tick(self.SUBMENU_SETTLE)
 
-        self.press(WindowEvent.PRESS_BUTTON_A, frames=2)
-        
-        # Wait for party list
-        for _ in range(45): self.pyboy.tick()
+        # Navigate vertical bag list to bag_index
+        for _attempt in range(bag_index + 4):   # +4 guard iterations
+            current = self.menu_cursor()
+            if current == bag_index:
+                break
+            diff = bag_index - current
+            btn  = WindowEvent.PRESS_ARROW_DOWN if diff > 0 else WindowEvent.PRESS_ARROW_UP
+            for _ in range(min(abs(diff), 1)):    # one step at a time (avoids overscroll)
+                self._press(btn)
 
-        dialog_lines = self.gs.dialog.strip().split('\n')
-        cursor_idx, target_idx = self._find_cursor_index_and_target_index(dialog_lines, pokemon_name)
-
-        if target_idx == -1:
-            print(f"[BATTLE] Pokemon '{pokemon_name}' not found.")
-            return False
-
-        self._navigate_list_vertical(cursor_idx, target_idx)
-
-        # Press A on Pokemon
-        self.press(WindowEvent.PRESS_BUTTON_A, frames=2)
-        for _ in range(30): self.pyboy.tick()
-        
-        # In the sub-menu (SHIFT/SEND OUT, STATS, CANCEL), Shift/Send Out is at the top
-        self.press(WindowEvent.PRESS_ARROW_UP, frames=2)
-        self.press(WindowEvent.PRESS_BUTTON_A, frames=2)
-        
-        print(f"[BATTLE] Selected pkmn({pokemon_name}).")
+        self._press_a()
+        print(f"[BATTLE] use_item(bag_index={bag_index}) sent.")
         return True
-
-    def item(self, item_name: str, pocket: Optional[str] = None) -> bool:
-        """
-        Select 'ITEM', find `item_name`, and use it.
-        Bag in Gen 1 is a scrolling list. 
-        """
-        if not self._back_to_main_menu():
-            return False
-
-        # Move to ITEM: go to FIGHT (top-left) -> DOWN
-        self.press(WindowEvent.PRESS_ARROW_UP, frames=2)
-        self.press(WindowEvent.PRESS_ARROW_LEFT, frames=2)
-        self.press(WindowEvent.PRESS_ARROW_DOWN, frames=2)
-        for _ in range(10): self.pyboy.tick()
-
-        self.press(WindowEvent.PRESS_BUTTON_A, frames=2)
-
-        # Wait for bag
-        for _ in range(45): self.pyboy.tick()
-
-        # Scrolling list logic
-        for _ in range(20): # max scroll attempts
-            dialog_lines = self.gs.dialog.strip().split('\n')
-            cursor_idx, target_idx = self._find_cursor_index_and_target_index(dialog_lines, item_name)
-            
-            if target_idx != -1:
-                # Found it
-                self._navigate_list_vertical(cursor_idx, target_idx)
-                # Press A to use
-                self.press(WindowEvent.PRESS_BUTTON_A, frames=2)
-                for _ in range(30): self.pyboy.tick()
-                print(f"[BATTLE] Used item({item_name}).")
-                return True
-                
-            # Scroll down
-            self.press(WindowEvent.PRESS_ARROW_DOWN, frames=2)
-            for _ in range(10): self.pyboy.tick()
-
-        print(f"[BATTLE] Item '{item_name}' not found.")
-        return False
 
     def run(self) -> bool:
         """
-        Select 'RUN'.
+        Select RUN.  Returns True if inputs were sent.
+
+        The actual escape is not guaranteed (low speed Pokémon may fail to flee
+        from faster wild Pokémon).  Check is_in_battle() after wait_for_turn()
+        to verify whether you escaped.
         """
-        if not self._back_to_main_menu():
+        if not self.is_in_battle():
+            print("[BATTLE] run(): not in battle.")
             return False
 
-        # Move to RUN: FIGHT(TL) -> RIGHT -> DOWN
-        self.press(WindowEvent.PRESS_ARROW_UP, frames=2)
-        self.press(WindowEvent.PRESS_ARROW_LEFT, frames=2)
-        self.press(WindowEvent.PRESS_ARROW_RIGHT, frames=2)
-        self.press(WindowEvent.PRESS_ARROW_DOWN, frames=2)
-        for _ in range(10): self.pyboy.tick()
+        if not self._back_to_main_menu():
+            print("[BATTLE] run(): could not reach main battle menu.")
+            return False
 
-        self.press(WindowEvent.PRESS_BUTTON_A, frames=2)
-        for _ in range(30): self.pyboy.tick()
-        
-        print("[BATTLE] Attempted to run().")
+        self._navigate_main_menu(RUN)
+        self._press_a()
+        print("[BATTLE] run() sent.")
         return True
