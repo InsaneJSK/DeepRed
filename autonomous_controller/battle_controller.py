@@ -158,40 +158,32 @@ class BattleController:
 
     def wait_for_turn(self, timeout: int | None = None) -> bool:
         """
-        Block until the player's MAIN battle menu is ready (CCD5 == 3).
+        Block until the player's MAIN battle menu is ready.
 
-        While CCD5 != 3, presses B every _TEXT_ADVANCE_EVERY ticks.
+        Returns True  — main battle menu is visible.
+        Returns False — battle ended (wIsInBattle == 0) OR timed out.
 
-        Why B and not A
-        ---------------
-        B advances text boxes in Pokemon Red (the text routine accepts A or B),
-        BUT B cannot select battle menu options.  Pressing A risks accidentally
-        choosing FIGHT or a move if the A press lands on the frame the menu
-        appears.  B is completely safe at every battle state:
-          - Text box visible  → B advances the text
-          - Main battle menu  → B does nothing (can't back out of battle)
-          - Sub-menu open     → B closes the sub-menu (also fine)
-          - HP/move animation → B is ignored (animation plays out)
+        Callers that need to distinguish the two cases should check
+        is_in_battle() after receiving False.
 
-        Because we exclusively press B (never A) while waiting, CCD5 == 3 is
-        unambiguous — no sub-menu can be open — so no extra B-dismissal step
-        is needed.
+        While not at the menu, presses B every _TEXT_ADVANCE_EVERY ticks
+        to advance text.  B is safe at all battle states (never selects menus).
         """
         limit = timeout if timeout is not None else self.TURN_TIMEOUT
 
         for tick in range(limit):
             self._tick()
 
+            # Early exit: battle ended — caller should clear remaining text
+            if not self.is_in_battle():
+                return False
+
             if self.is_player_turn():
-                # B-only pressing guarantees we never opened a sub-menu,
-                # so CCD5 == 3 means the main battle menu is showing.
-                # Settle briefly and confirm.
                 self._tick(self.SUBMENU_SETTLE)
                 if self.is_player_turn():
                     return True
 
             else:
-                # Advance text / wait through animations using B.
                 if tick % _TEXT_ADVANCE_EVERY == 0:
                     self.pyboy.send_input(WindowEvent.PRESS_BUTTON_B)
                     self._tick(self.PRESS_FRAMES)
@@ -199,6 +191,31 @@ class BattleController:
                     self._tick(self.SETTLE_FRAMES)
 
         return False
+
+    def clear_post_battle_text(self, timeout: int = 3000) -> None:
+        """
+        Advance any remaining text after a battle ends (XP gain, level-up, etc.).
+
+        Presses B until the dialog buffer has been empty for 30 consecutive
+        ticks (overworld fully resumed) or the timeout is reached.
+        """
+        stable = 0
+        STABLE_NEEDED = 30
+
+        for tick in range(timeout):
+            self._tick()
+
+            if self.gs.dialog.strip():
+                stable = 0
+                if tick % _TEXT_ADVANCE_EVERY == 0:
+                    self.pyboy.send_input(WindowEvent.PRESS_BUTTON_B)
+                    self._tick(self.PRESS_FRAMES)
+                    self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_B)
+                    self._tick(self.SETTLE_FRAMES)
+            else:
+                stable += 1
+                if stable >= STABLE_NEEDED:
+                    break
 
     # ------------------------------------------------------------------
     # Main battle menu navigation (2×2 grid)

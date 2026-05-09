@@ -44,6 +44,7 @@ from autonomous_controller.interrupt_handler import InterruptHandler, BattleInte
 from autonomous_controller.nav_core          import NavCore
 from autonomous_controller.nav_astar         import NavAstar
 from autonomous_controller.hop_executor      import HopExecutor
+from autonomous_controller.path_cache        import PathCache
 
 # Starter-picking constants
 # Steps to reach and face each starter's pokeball from the position where
@@ -72,6 +73,7 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
         game_state,
         graph_path: str,
         pokered_root: str = "pokered",
+        starter: str = "charmander",
     ):
         super().__init__()
         self.pyboy     = pyboy
@@ -79,6 +81,11 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
         self.graph     = WorldGraph(graph_path)
         self.rom_pass  = RomPassability(pokered_root)
         self.interrupt = InterruptHandler(pyboy, game_state)
+        self.path_cache = PathCache()   # learns & replays successful paths
+
+        # Starter to auto-pick when locked in Oak's lab during navigation.
+        # Override before the first go_to() call if you want a different starter.
+        self.starter   = starter.lower()
 
         self._expected_map_id: int = 0
 
@@ -94,19 +101,23 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
 
     # Navigation API
 
-    def go_to(self, destination: str) -> bool:
+    def go_to(self, destination: str, _starter_done: bool = False) -> bool:
         """
         Navigate from the current map to ``destination`` via BFS + A*.
 
         Returns True on success.
         Returns False if:
           - no route exists
-          - a hop fails (including NPC displacement — caller decides next step)
-          - a battle starts mid-navigation
+          - a hop fails (NPC displacement, etc.) — caller decides next step
+          - a battle starts mid-navigation (BattleInterrupt propagates up)
 
-        Navigation is NOT automatically re-tried after an interrupt.
-        The AI agent is responsible for calling go_to() again (or pick_starter()
-        or another action) once the interrupting event has resolved.
+        Oak's lab fallback
+        ------------------
+        If a hop fails while the player is locked in OAKS_LAB with an empty
+        party (Oak's cutscene just ended and a starter must be chosen),
+        pick_starter() is called automatically using ``self.starter``, and
+        go_to() restarts from the new position.  This happens at most once
+        per call chain (guarded by ``_starter_done``).
         """
         destination = destination.upper()
 
@@ -129,8 +140,31 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
                 print(f"[HOP]  {src} → {dst}")
 
                 if not self._execute_hop(src, dst):
-                    print(f"[ERROR] Hop {src} → {dst} failed")
-                    print(f"        Current: {self._pos()}, map: {self._map_name()}")
+                    current_map = self._map_name()
+                    print(f"[ERROR] Hop {src} → {dst} failed at {current_map}")
+
+                    # ── Oak's lab fallback ────────────────────────────────────
+                    # If we end up locked in Oak's lab without a starter,
+                    # pick one automatically and restart navigation.
+                    if (
+                        not _starter_done
+                        and current_map == "OAKS_LAB"
+                        and not self.gs.party_pokemon
+                    ):
+                        print(
+                            f"[GO_TO] Locked in Oak's lab — auto-picking "
+                            f"{self.starter}…"
+                        )
+                        picked = self.pick_starter(self.starter)
+                        if picked:
+                            print("[GO_TO] Starter picked — resuming navigation.")
+                            return self.go_to(destination, _starter_done=True)
+                        else:
+                            print("[GO_TO] pick_starter() failed — aborting.")
+                            return False
+                    # ── end fallback ──────────────────────────────────────────
+
+                    print(f"        Current: {self._pos()}, map: {current_map}")
                     return False   # AI agent decides what happens next
 
                 # Settle after each map transition
