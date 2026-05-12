@@ -8,25 +8,28 @@ Expects NavCore to be in the MRO (provides _step, _dodge, _pos, _map_id,
 _build_passable_fn, _expected_map_id) and AutonomousController's graph/rom_pass.
 """
 
-from typing import Protocol, Callable
+from typing import Protocol, Callable, Optional
 
 from autonomous_controller.constants import DIRECTIONS
 from autonomous_controller.pathfinder import astar
 from autonomous_controller.interrupt_handler import InterruptHandler
+from autonomous_controller.path_cache import PathCache
 
 class _NavAstarDeps(Protocol): #pylint: disable=too-few-public-methods
     def _step(self, direction: str) -> bool: ...
     def _dodge(self, direction: str, goal_x: int, goal_y: int) -> bool: ...
     def _pos(self) -> tuple[int, int]: ...
     def _map_id(self) -> int: ...
+    def _map_name(self) -> Optional[str]: ...
     def _build_passable_fn(self) -> Callable[[int, int], bool]: ...
     _expected_map_id: int
     interrupt: InterruptHandler
+    path_cache: Optional[PathCache]
 
 class NavAstar(_NavAstarDeps): #pylint: disable=too-few-public-methods
     """Mixin: navigate_to_tile with oscillation/escape handling."""
 
-    OSCILLATION_THRESHOLD = 3   # visits to same tile before triggering escape
+    OSCILLATION_THRESHOLD = 6   # visits to same tile before triggering escape
     ESCAPE_BURST_STEPS    = 5   # forced steps during an escape burst
 
     # Helpers
@@ -96,7 +99,7 @@ class NavAstar(_NavAstarDeps): #pylint: disable=too-few-public-methods
         gx = ctx["goal_x"]
         gy = ctx["goal_y"]
 
-        if len(confirmed_blocked) > 15:
+        if len(confirmed_blocked) > 40:
             confirmed_blocked.clear()
             visit_counts.clear()
             return True
@@ -215,16 +218,59 @@ class NavAstar(_NavAstarDeps): #pylint: disable=too-few-public-methods
             effective_goal != (real_goal_x, real_goal_y)
         )
 
+    # ------------------------------------------------------------------
+    # Cached-path execution
+    # ------------------------------------------------------------------
+
+    def _execute_cached_path(
+        self, dirs: list[str], goal_x: int, goal_y: int
+    ) -> bool:
+        """
+        Replay a cached direction list.
+
+        Returns True if the goal is reached or the map changes (connection
+        crossing counts as success).  Returns False on the first failed step
+        so the caller can fall back to A*.
+        """
+        start_map = self._map_id()
+        for direction in dirs:
+            if self._map_id() != start_map:
+                return True   # map transition fired — connection crossed
+            if not self._step(direction):
+                print("  [CACHE] Step failed — cached path invalidated, using A*")
+                return False
+        cx, cy = self._pos()  # pylint: disable=unpacking-non-sequence
+        return (cx == goal_x and cy == goal_y) or (self._map_id() != start_map)
+
     # Main navigation
 
     def navigate_to_tile(
         self,
         goal_x: int,
         goal_y: int,
-        max_steps: int = 200,
+        max_steps: int = 500,
         forbidden_tiles: set[tuple[int, int]] | None = None,
     ) -> bool:
         """Navigate to the specified tile using A* with oscillation and escape handling."""
+
+        cache: Optional[PathCache] = getattr(self, "path_cache", None)
+        map_name: Optional[str]   = self._map_name()  # pylint: disable=assignment-from-no-return
+        cx0, cy0 = self._pos()  # pylint: disable=unpacking-non-sequence
+
+        # ── Try optimal straight-line if goal is known reachable ──────────
+        if cache and map_name:
+            optimal = cache.get_optimal_path(map_name, cx0, cy0, goal_x, goal_y)
+            if optimal:
+                print(
+                    f"  [CACHE] Trying {len(optimal)}-step optimal path "
+                    f"{map_name} ({cx0},{cy0})→({goal_x},{goal_y})"
+                )
+                if self._execute_cached_path(optimal, goal_x, goal_y):
+                    cache.mark_reached(map_name, goal_x, goal_y)
+                    return True
+                print("  [CACHE] Straight-line blocked — falling back to A*")
+
+        # ── A* navigation ─────────────────────────────────────────────────
         confirmed_blocked: set[tuple[int, int]] = set()
         forbidden_tiles = forbidden_tiles or set()
         ctx = {
@@ -234,18 +280,22 @@ class NavAstar(_NavAstarDeps): #pylint: disable=too-few-public-methods
             "forbidden_tiles": forbidden_tiles,
         }
         visit_counts: dict[tuple[int, int], int] = {}
+        had_displacement = False
 
         for _ in range(max_steps):
-            cx, cy = self._pos() #pylint: disable=assignment-from-no-return, disable=unpacking-non-sequence
+            cx, cy = self._pos()  # pylint: disable=unpacking-non-sequence
 
             if self._reached_goal(cx, cy, goal_x, goal_y):
+                if cache and map_name and not had_displacement:
+                    cache.mark_reached(map_name, goal_x, goal_y)
                 return True
 
             if self._map_changed():
+                if cache and map_name and not had_displacement:
+                    cache.mark_reached(map_name, goal_x, goal_y)
                 return False
 
-            if self._handle_oscillation(cx, cy, ctx,
-                                    visit_counts):
+            if self._handle_oscillation(cx, cy, ctx, visit_counts):
                 continue
 
             path, effective_goal = self._compute_path(cx, cy, ctx)
@@ -253,11 +303,17 @@ class NavAstar(_NavAstarDeps): #pylint: disable=too-few-public-methods
             if path is None:
                 return False
 
-            if self._execute_step(path[0], goal_x, goal_y,
-                                confirmed_blocked):
+            displaced = self._execute_step(path[0], goal_x, goal_y, confirmed_blocked)
+
+            if getattr(self, "interrupt", None) and getattr(self.interrupt, "was_displaced", False):
+                had_displacement = True
+
+            if displaced:
                 continue
 
             if self._reached_adjacent_goal((cx, cy), effective_goal, goal_x, goal_y):
+                if cache and map_name and not had_displacement:
+                    cache.mark_reached(map_name, goal_x, goal_y)
                 return True
 
         return self._pos() == (goal_x, goal_y)

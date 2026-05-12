@@ -1,0 +1,42 @@
+{
+  "REDS_HOUSE_2F:7,2": {
+    "runs": 2,
+    "locked": false
+  },
+  "REDS_HOUSE_1F:2,8": {
+    "runs": 2,
+    "locked": false
+  },
+  "PALLET_TOWN:2,6": {
+    "runs": 2,
+    "locked": false
+  },
+  "PALLET_TOWN:3,7": {
+    "runs": 1,
+    "locked": false
+  },
+  "PALLET_TOWN:1,7": {
+    "runs": 1,
+    "locked": false
+  },
+  "PALLET_TOWN:8,0": {
+    "runs": 1,
+    "locked": false
+  },
+  "OAKS_LAB:4,12": {
+    "runs": 1,
+    "locked": false
+  },
+  "PALLET_TOWN:4,10": {
+    "runs": 1,
+    "locked": false
+  },
+  "PALLET_TOWN:5,11": {
+    "runs": 1,
+    "locked": false
+  },
+  "PALLET_TOWN:3,11": {
+    "runs": 1,
+    "locked": false
+  }
+}
