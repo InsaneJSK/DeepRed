@@ -2,8 +2,8 @@
 Maps location and tileset IDs to their names
 """
 
-
 from enum import IntEnum
+
 
 class MapLocation(IntEnum):
     """Maps location IDs to their names"""
@@ -232,6 +232,7 @@ class MapLocation(IntEnum):
     BRUNO = 0xF6
     AGATHA = 0xF7
 
+
 class Tileset(IntEnum):
     """Maps tileset IDs to their names"""
 
@@ -259,6 +260,7 @@ class Tileset(IntEnum):
     CLUB = 0x15
     FACILITY = 0x16
     PLATEAU = 0x17
+
 
 if __name__ == "__main__":
     print("Testing Map IDs:")

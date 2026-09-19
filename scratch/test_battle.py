@@ -16,16 +16,19 @@ The script will:
 Press ESC at any time to quit.
 """
 
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from pyboy import PyBoy
-from memory_state.game_state import PokemonGameState
-from autonomous_controller.battle_controller import BattleController
 import keyboard
+from pyboy import PyBoy
+
+from autonomous_controller.battle_controller import BattleController
+from memory_state.game_state import PokemonGameState
 
 # ---------------------------------------------------------------------------
-ROM        = "Pokemon_Red/Red.gb"
+ROM = "Pokemon_Red/Red.gb"
 SAVE_STATE = "saves/oak-room-battle.state"
 # ---------------------------------------------------------------------------
 
@@ -52,7 +55,7 @@ print(f"       Party: {[p['species_name'] for p in gs.party_pokemon]}")
 
 # ── Phase 2: wait for player's first turn ─────────────────────────────────
 print("[TEST] Waiting for player turn (advancing intro text)…")
-ok = bc.wait_for_turn(timeout=6000)   # trainer intro can be long
+ok = bc.wait_for_turn(timeout=6000)  # trainer intro can be long
 print(f"[TEST] Player turn ready: {ok}")
 print(f"       wCurrentMenuItem  = {bc.menu_cursor()}")
 print(f"       is_player_turn() = {bc.is_player_turn()}")

@@ -33,33 +33,68 @@ uv run python -X utf8 autonomous_controller/build_world_graph.py --pokered poker
 
 ## Run and test
 
-Watch the emulator navigate from the bedroom to Route 1:
+Watch the emulator navigate from the bedroom through Route 1 to Viridian City:
 
 ```powershell
 uv run python -X utf8 main.py
 ```
 
-Change `GOAL` in `main.py` to `"VIRIDIAN_CITY"` to watch both north crossings.
+Change `GOAL` in `main.py` to choose another destination.
 Close the emulator window or press Ctrl+C in the terminal to exit, including
 during navigation or battles. Shutdown releases the emulator without overwriting
 the original cartridge RAM file.
 
-Run the unit tests and the headless bedroom-to-Viridian integration test:
+Run the test suite and, separately, the full headless bedroom-to-Viridian regression:
 
 ```powershell
-uv run python -X utf8 -m unittest discover -s tests -v
+uv run pytest
 uv run python -X utf8 scratch/navigation_regression.py
 ```
 
-The headless test leaves original saves and cartridge RAM unchanged. Add
+Pytest discovers tests in `tests/`, including the existing unittest tests. Tests
+marked `integration` require local navigation assets or a real emulator; missing
+required assets are reported as skips, not passes. Run the fast subset with
+`uv run pytest -m "not integration"`, or only integration tests with
+`uv run pytest -m integration`. The full travel regression above is a separate
+script and is not included in pytest discovery.
+
+The headless travel regression leaves original saves and cartridge RAM unchanged. Add
 `--checkpoint` to retain test checkpoints in `scratch/`.
 
 ## Development
 
-The default `dev` group includes pylint. Notebook support is optional:
+The default `dev` group includes Ruff and pytest. Ruff checks basic Python errors
+and import ordering, and formats Python code with a 100-character target width.
+Configuration lives in `pyproject.toml`; external repositories, local game assets,
+reports, and notebooks are excluded from Ruff.
+
+Check before committing (these commands do not edit source files):
 
 ```powershell
-uv run pylint autonomous_controller memory_state main.py
+uv run ruff check .
+uv run ruff format --check .
+uv run pytest
+```
+
+Preview changes before applying them:
+
+```powershell
+uv run ruff check . --diff
+uv run ruff format . --diff
+```
+
+Apply safe lint fixes and formatting when ready. Replace `.` with a filename to
+work on one file. Some lint findings need manual edits.
+
+```powershell
+uv run ruff check . --fix
+uv run ruff format .
+```
+
+These tools run on demand; no automatic commit hooks are installed.
+Notebook support is optional:
+
+```powershell
 uv sync --locked --all-groups
 uv run --group notebooks python -m ipykernel --version
 ```

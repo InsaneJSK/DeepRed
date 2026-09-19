@@ -8,18 +8,18 @@ warp/connection lookups.
 import json
 from collections import deque
 
+
 class WorldGraph:
     """
     Loads world_graph.json and provides BFS routing, warp/connection lookups.
     """
+
     def __init__(self, graph_path: str):
         with open(graph_path, encoding="utf-8") as f:
             data = json.load(f)
         self.maps: dict = data["maps"]
         self.name_to_id: dict[str, int] = data["map_name_to_id"]
-        self.id_to_name: dict[int, str] = {
-            int(k): v for k, v in data["map_id_to_name"].items()
-        }
+        self.id_to_name: dict[int, str] = {int(k): v for k, v in data["map_id_to_name"].items()}
 
     def map_name(self, map_id: int) -> str | None:
         """Returns map name for given map ID, or None if not found."""
@@ -68,6 +68,7 @@ class WorldGraph:
     def terrain_route(self, src, dst, position, terrain):
         """BFS over map *regions*, preventing routes through inaccessible entrances."""
         from autonomous_controller.constants import COMPASS_TO_ARROW
+
         region = terrain.components(src).get(position)
         if region is None:
             return None
@@ -79,18 +80,19 @@ class WorldGraph:
                 return path
             edges = []
             for warp in self.warps(name):
-                if terrain.components(name).get((warp['x'], warp['y'])) != region:
+                if terrain.components(name).get((warp["x"], warp["y"])) != region:
                     continue
-                dest = warp['dest_map']
-                index = warp['dest_warp_index'] - 1
+                dest = warp["dest_map"]
+                index = warp["dest_warp_index"] - 1
                 warps = self.warps(dest)
                 if 0 <= index < len(warps):
-                    landing = (warps[index]['x'], warps[index]['y'])
+                    landing = (warps[index]["x"], warps[index]["y"])
                     edges.append((dest, terrain.components(dest).get(landing)))
             for compass, conn in self.connections(name).items():
-                dest = conn['map']
+                dest = conn["map"]
                 for border, landing in terrain.connection_tiles(
-                        name, dest, COMPASS_TO_ARROW[compass], conn.get('offset', 0)):
+                    name, dest, COMPASS_TO_ARROW[compass], conn.get("offset", 0)
+                ):
                     if terrain.components(name).get(border) == region:
                         edges.append((dest, terrain.components(dest).get(landing)))
             for edge in edges:

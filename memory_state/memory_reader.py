@@ -1,6 +1,8 @@
 """
 Provides utilities for reading memory from the PyBoy emulator.
 """
+
+
 class MemoryReader:
     """
     Thin wrapper over PyBoy memory access.
@@ -24,10 +26,11 @@ class MemoryReader:
         hi = self.pyboy.memory[addr + 1]
         return lo | (hi << 8)
 
+
 CHAR_MAP = {
-    #Line Break
+    # Line Break
     0x4E: "\n",
-    #Punctuations
+    # Punctuations
     0x9A: "(",
     0x9B: ")",
     0x9C: ":",
@@ -68,6 +71,7 @@ CHAR_MAP = {
     0xF5: "♀",
 }
 
+
 def convert_text(bytes_data: list[int]) -> str:
     """Convert Pokemon text format to ASCII"""
     result = []
@@ -75,7 +79,7 @@ def convert_text(bytes_data: list[int]) -> str:
         if b == 0x50:  # End marker
             break
 
-        #Alphabet Ranges
+        # Alphabet Ranges
         if 0x80 <= b <= 0x99:  # A-Z
             result.append(chr(b - 0x80 + ord("A")))
         elif 0xA0 <= b <= 0xB9:  # a-z
@@ -88,8 +92,10 @@ def convert_text(bytes_data: list[int]) -> str:
             result.append(CHAR_MAP.get(b, f"[{b:02X}]"))
     return "".join(result).strip()
 
+
 if __name__ == "__main__":
     from pyboy import PyBoy
+
     pyboy_sample = PyBoy("Pokemon_Red/Red.gb")
     m = MemoryReader(pyboy_sample)
 

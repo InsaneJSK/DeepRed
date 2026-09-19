@@ -38,22 +38,22 @@ from pyboy.utils import WindowEvent  # pylint: disable=no-name-in-module
 # ---------------------------------------------------------------------------
 # RAM addresses (verified against pret/pokered + live diagnostic)
 # ---------------------------------------------------------------------------
-_MENU_CURSOR      = 0xCC26  # wCurrentMenuItem  — cursor in current menu
-_SAVED_CURSOR     = 0xCC29  # wBattleAndStartSavedMenuItem
-_MOVE_CURSOR      = 0xCC2A  # wCurrentMoveNum   — move slot in FIGHT sub-menu
-_PLAYER_MON_SLOT  = 0xCC2E  # wPlayerMonNumber  — active party slot (0-indexed)
+_MENU_CURSOR = 0xCC26  # wCurrentMenuItem  — cursor in current menu
+_SAVED_CURSOR = 0xCC29  # wBattleAndStartSavedMenuItem
+_MOVE_CURSOR = 0xCC2A  # wCurrentMoveNum   — move slot in FIGHT sub-menu
+_PLAYER_MON_SLOT = 0xCC2E  # wPlayerMonNumber  — active party slot (0-indexed)
 _BATTLE_TURN_SIDE = 0xCCD5  # NOT reliable as a turn-indicator (varies by frame)
-_IS_IN_BATTLE     = 0xD057  # wIsInBattle: 0=none, 1=wild, 2=trainer
-_BATTLE_TYPE      = 0xD05A  # wBattleType: 0=normal, 1=old man, 2=safari
+_IS_IN_BATTLE = 0xD057  # wIsInBattle: 0=none, 1=wild, 2=trainer
+_BATTLE_TYPE = 0xD05A  # wBattleType: 0=normal, 1=old man, 2=safari
 
 # Main battle menu option indices
 FIGHT = 0
-PKMN  = 1
-ITEM  = 2
-RUN   = 3
+PKMN = 1
+ITEM = 2
+RUN = 3
 
 # Player-turn sentinel (wBattleTurnSide == 3 means battle menu is showing)
-_PLAYER_TURN_VALUE  = 3
+_PLAYER_TURN_VALUE = 3
 # How often (in ticks) to press A while waiting for the menu (advances text)
 _TEXT_ADVANCE_EVERY = 20
 
@@ -66,25 +66,25 @@ class BattleController:
     """
 
     # Ticks to hold a button press
-    PRESS_FRAMES   = 3
+    PRESS_FRAMES = 3
     # Ticks to settle between presses
-    SETTLE_FRAMES  = 8
+    SETTLE_FRAMES = 8
     # Ticks to wait for the screen to settle after opening a sub-menu
     SUBMENU_SETTLE = 30
     # Max ticks for wait_for_turn() (~10 s at 60 fps — covers long animations)
-    TURN_TIMEOUT   = 600
+    TURN_TIMEOUT = 600
 
     def __init__(self, pyboy, game_state):
         self.pyboy = pyboy
-        self.gs    = game_state
+        self.gs = game_state
 
         self._release_map = {
-            WindowEvent.PRESS_ARROW_UP:    WindowEvent.RELEASE_ARROW_UP,
-            WindowEvent.PRESS_ARROW_DOWN:  WindowEvent.RELEASE_ARROW_DOWN,
-            WindowEvent.PRESS_ARROW_LEFT:  WindowEvent.RELEASE_ARROW_LEFT,
+            WindowEvent.PRESS_ARROW_UP: WindowEvent.RELEASE_ARROW_UP,
+            WindowEvent.PRESS_ARROW_DOWN: WindowEvent.RELEASE_ARROW_DOWN,
+            WindowEvent.PRESS_ARROW_LEFT: WindowEvent.RELEASE_ARROW_LEFT,
             WindowEvent.PRESS_ARROW_RIGHT: WindowEvent.RELEASE_ARROW_RIGHT,
-            WindowEvent.PRESS_BUTTON_A:    WindowEvent.RELEASE_BUTTON_A,
-            WindowEvent.PRESS_BUTTON_B:    WindowEvent.RELEASE_BUTTON_B,
+            WindowEvent.PRESS_BUTTON_A: WindowEvent.RELEASE_BUTTON_A,
+            WindowEvent.PRESS_BUTTON_B: WindowEvent.RELEASE_BUTTON_B,
         }
 
     # ------------------------------------------------------------------
@@ -280,8 +280,6 @@ class BattleController:
             return True
         return self.wait_for_turn()
 
-
-
     # ------------------------------------------------------------------
     # Public battle actions
     # ------------------------------------------------------------------
@@ -336,11 +334,11 @@ class BattleController:
             if current == party_index:
                 break
             diff = party_index - current
-            btn  = WindowEvent.PRESS_ARROW_DOWN if diff > 0 else WindowEvent.PRESS_ARROW_UP
+            btn = WindowEvent.PRESS_ARROW_DOWN if diff > 0 else WindowEvent.PRESS_ARROW_UP
             for _ in range(abs(diff)):
                 self._press(btn)
 
-        self._press_a()   # open Pokémon sub-menu (SHIFT / STATS / CANCEL)
+        self._press_a()  # open Pokémon sub-menu (SHIFT / STATS / CANCEL)
         self._tick(self.SUBMENU_SETTLE)
 
         # SHIFT is the first option — navigate up to ensure cursor is there
@@ -368,13 +366,13 @@ class BattleController:
         self._tick(self.SUBMENU_SETTLE)
 
         # Navigate vertical bag list to bag_index
-        for _attempt in range(bag_index + 4):   # +4 guard iterations
+        for _attempt in range(bag_index + 4):  # +4 guard iterations
             current = self.menu_cursor()
             if current == bag_index:
                 break
             diff = bag_index - current
-            btn  = WindowEvent.PRESS_ARROW_DOWN if diff > 0 else WindowEvent.PRESS_ARROW_UP
-            for _ in range(min(abs(diff), 1)):    # one step at a time (avoids overscroll)
+            btn = WindowEvent.PRESS_ARROW_DOWN if diff > 0 else WindowEvent.PRESS_ARROW_UP
+            for _ in range(min(abs(diff), 1)):  # one step at a time (avoids overscroll)
                 self._press(btn)
 
         self._press_a()

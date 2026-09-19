@@ -27,22 +27,21 @@ When text is printing on screen:
   - Text-print flag candidates (0xC4F1, 0xFF8C) should be non-zero
 """
 
-import sys
 import os
-import time
+import sys
 
 # ---------------------------------------------------------------------------
 # PyBoy + game state bootstrap
 # ---------------------------------------------------------------------------
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from pyboy import PyBoy
-from pyboy.utils import WindowEvent
-from memory_state.game_state import PokemonGameState
 import keyboard
+from pyboy import PyBoy
+
+from memory_state.game_state import PokemonGameState
 
 SAVE_STATE = "saves/oak-room-battle.state"
-ROM_PATH   = "Pokemon_Red/Red.gb"
+ROM_PATH = "Pokemon_Red/Red.gb"
 
 pyboy = PyBoy(ROM_PATH, window="SDL2")
 pyboy.tick()
@@ -57,7 +56,6 @@ gs = PokemonGameState(pyboy)
 CANDIDATES = {
     # ── Confirmed from game_state.py ──────────────────────────────────────
     "in_battle    [0xD057]": 0xD057,
-
     # ── Battle-menu cursor ────────────────────────────────────────────────
     # wCurrentMenuItem — should be 0=FIGHT 1=PKMN 2=ITEM 3=RUN in main menu
     "menuItem     [0xCC26]": 0xCC26,
@@ -67,7 +65,6 @@ CANDIDATES = {
     "moveCursor   [0xCC2A]": 0xCC2A,
     # wMenuItemToSwap / wWhichPokemon
     "whichPkmn    [0xCC35]": 0xCC35,
-
     # ── Input / joypad lock ───────────────────────────────────────────────
     # wJoyIgnore — set while input should be ignored (animation, text)
     "joyIgnore    [0xFFAC]": 0xFFAC,
@@ -77,7 +74,6 @@ CANDIDATES = {
     "textBusy2    [0xFF8C]": 0xFF8C,
     # Game state / sub-state byte (sometimes used as busy flag)
     "gameState    [0xC0EE]": 0xC0EE,
-
     # ── Battle data ───────────────────────────────────────────────────────
     "enemySpecies [0xCFD8]": 0xCFD8,
     "enemyHPhi    [0xCFE6]": 0xCFE6,
@@ -93,8 +89,9 @@ CANDIDATES = {
 # ---------------------------------------------------------------------------
 # Print helpers
 # ---------------------------------------------------------------------------
-SEP  = "─" * 56
-TICK_INTERVAL = 30   # print every N ticks
+SEP = "─" * 56
+TICK_INTERVAL = 30  # print every N ticks
+
 
 def snapshot() -> dict[str, int]:
     return {label: gs.mem.read_byte(addr) for label, addr in CANDIDATES.items()}
@@ -108,6 +105,7 @@ def print_snapshot(snap: dict[str, int], tick: int) -> None:
         bar = "█" * val if val <= 32 else f"0x{val:02X}"
         print(f"  {label:<30}  {val:>4}  {bar}")
     print(SEP)
+
 
 # ---------------------------------------------------------------------------
 # Main loop

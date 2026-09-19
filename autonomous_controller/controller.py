@@ -38,28 +38,28 @@ Usage
 
 from pyboy.utils import WindowEvent  # pylint: disable=no-name-in-module
 
-from autonomous_controller.world_graph       import WorldGraph
-from autonomous_controller.walkable_map      import RomPassability
-from autonomous_controller.interrupt_handler import InterruptHandler, BattleInterrupt
-from autonomous_controller.nav_core          import NavCore
-from autonomous_controller.nav_astar         import NavAstar
-from autonomous_controller.hop_executor      import HopExecutor
+from autonomous_controller.hop_executor import HopExecutor
+from autonomous_controller.interrupt_handler import BattleInterrupt, InterruptHandler
+from autonomous_controller.nav_astar import NavAstar
+from autonomous_controller.nav_core import NavCore
+from autonomous_controller.walkable_map import RomPassability
+from autonomous_controller.world_graph import WorldGraph
 
 # Starter-picking constants
 # Steps to reach and face each starter's pokeball from the position where
 # Oak's final pre-pick dialogue ends.
 # 'face_up' = press UP to change facing without moving (table blocks movement)
 _STARTER_STEPS: dict[str, list[str]] = {
-    "bulbasaur":  ["down", "right", "right", "right", "face_up"],
+    "bulbasaur": ["down", "right", "right", "right", "face_up"],
     "charmander": ["down", "right", "face_up"],
-    "squirtle":   ["down", "right", "right", "face_up"],
+    "squirtle": ["down", "right", "right", "face_up"],
 }
 
 # Species name as it appears in PokemonGameState.party_pokemon
 _STARTER_SPECIES: dict[str, str] = {
-    "bulbasaur":  "BULBASAUR",
+    "bulbasaur": "BULBASAUR",
     "charmander": "CHARMANDER",
-    "squirtle":   "SQUIRTLE",
+    "squirtle": "SQUIRTLE",
 }
 
 
@@ -75,28 +75,28 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
         starter: str = "charmander",
     ):
         super().__init__()
-        self.pyboy     = pyboy
-        self.gs        = game_state
-        self.graph     = WorldGraph(graph_path)
-        self.rom_pass  = RomPassability(pokered_root)
+        self.pyboy = pyboy
+        self.gs = game_state
+        self.graph = WorldGraph(graph_path)
+        self.rom_pass = RomPassability(pokered_root)
         self.interrupt = InterruptHandler(pyboy, game_state)
         self.path_cache = None  # Old reachability entries are not safe movement paths.
-        self.nav_stats = {'step_calls': 0, 'blocked_steps': 0}
-        self.last_error = ''
+        self.nav_stats = {"step_calls": 0, "blocked_steps": 0}
+        self.last_error = ""
 
         # Starter to auto-pick when locked in Oak's lab during navigation.
         # Override before the first go_to() call if you want a different starter.
-        self.starter   = starter.lower()
+        self.starter = starter.lower()
 
         self._expected_map_id: int = 0
 
         self._release_map = {
-            WindowEvent.PRESS_ARROW_UP:     WindowEvent.RELEASE_ARROW_UP,
-            WindowEvent.PRESS_ARROW_DOWN:   WindowEvent.RELEASE_ARROW_DOWN,
-            WindowEvent.PRESS_ARROW_LEFT:   WindowEvent.RELEASE_ARROW_LEFT,
-            WindowEvent.PRESS_ARROW_RIGHT:  WindowEvent.RELEASE_ARROW_RIGHT,
-            WindowEvent.PRESS_BUTTON_A:     WindowEvent.RELEASE_BUTTON_A,
-            WindowEvent.PRESS_BUTTON_B:     WindowEvent.RELEASE_BUTTON_B,
+            WindowEvent.PRESS_ARROW_UP: WindowEvent.RELEASE_ARROW_UP,
+            WindowEvent.PRESS_ARROW_DOWN: WindowEvent.RELEASE_ARROW_DOWN,
+            WindowEvent.PRESS_ARROW_LEFT: WindowEvent.RELEASE_ARROW_LEFT,
+            WindowEvent.PRESS_ARROW_RIGHT: WindowEvent.RELEASE_ARROW_RIGHT,
+            WindowEvent.PRESS_BUTTON_A: WindowEvent.RELEASE_BUTTON_A,
+            WindowEvent.PRESS_BUTTON_B: WindowEvent.RELEASE_BUTTON_B,
             WindowEvent.PRESS_BUTTON_START: WindowEvent.RELEASE_BUTTON_START,
         }
 
@@ -121,16 +121,16 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
         per call chain (guarded by ``_starter_done``).
         """
         destination = destination.upper()
-        self.last_error = ''
+        self.last_error = ""
 
         try:
-            if self.gs.map['in_battle']:
-                raise BattleInterrupt('Battle active before navigation')
+            if self.gs.map["in_battle"]:
+                raise BattleInterrupt("Battle active before navigation")
             current = self._map_name()
             route = self.graph.terrain_route(current, destination, self._pos(), self.rom_pass)
 
             if current is None or route is None:
-                self.last_error = 'No connected walking route from the current region.'
+                self.last_error = "No connected walking route from the current region."
                 print(f"[GO_TO] No route from {current} to {destination}")
                 return False
 
@@ -156,10 +156,7 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
                         and current_map == "OAKS_LAB"
                         and not self.gs.party_pokemon
                     ):
-                        print(
-                            f"[GO_TO] Locked in Oak's lab — auto-picking "
-                            f"{self.starter}…"
-                        )
+                        print(f"[GO_TO] Locked in Oak's lab — auto-picking {self.starter}…")
                         picked = self.pick_starter(self.starter)
                         if picked:
                             print("[GO_TO] Starter picked — resuming navigation.")
@@ -170,10 +167,12 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
                     # ── end fallback ──────────────────────────────────────────
 
                     print(f"        Current: {self._pos()}, map: {current_map}")
-                    self.last_error = ('A game script moved or stopped the player.'
-                                       if self.interrupt.was_displaced else
-                                       'No reachable entrance or crossing; check objects and story gates.')
-                    return False   # AI agent decides what happens next
+                    self.last_error = (
+                        "A game script moved or stopped the player."
+                        if self.interrupt.was_displaced
+                        else "No reachable entrance or crossing; check objects and story gates."
+                    )
+                    return False  # AI agent decides what happens next
 
                 # Settle after each map transition
                 for _ in range(30):
@@ -238,7 +237,6 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
         if not self.interrupt.wait_for_control():
             print("[STARTER] Timed out waiting for player control — giving up.")
             return False
-
 
         # Execute movement steps
         for step in _STARTER_STEPS[pokemon]:

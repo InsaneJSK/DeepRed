@@ -12,17 +12,18 @@ To change the starter or goal, edit the CONFIG block below.
 """
 
 from pyboy import PyBoy
+
 from autonomous_controller import AutonomousController, BattleController, BattleInterrupt
-from memory_state.game_state import PokemonGameState
 from autonomous_controller.emulator_session import EmulatorClosed, EmulatorSession
+from memory_state.game_state import PokemonGameState
 
 # CONFIG
-ROM        = "Pokemon_Red/Red.gb"
+ROM = "Pokemon_Red/Red.gb"
 SAVE_STATE = "saves/in-room-start.state"
-GRAPH      = "world_graph.json"
-STARTER    = "charmander"   # "bulbasaur" | "charmander" | "squirtle"
-GOAL       = "VIRIDIAN_CITY"
-MAX_TURNS  = 50             # safety cap per battle
+GRAPH = "world_graph.json"
+STARTER = "charmander"  # "bulbasaur" | "charmander" | "squirtle"
+GOAL = "VIRIDIAN_CITY"
+MAX_TURNS = 50  # safety cap per battle
 
 
 # Battle loop (called whenever a battle is detected)
@@ -32,8 +33,10 @@ def _run_battle_loop(bc: BattleController, gs: PokemonGameState) -> None:
     print(f"\n[BATTLE] {b_type} started!")
     if gs.party_pokemon:
         moves = gs.party_pokemon[0].get("moves, pp", [])
-        print(f"[BATTLE] Lead: {gs.party_pokemon[0].get('species_name','?')}  "
-              f"Moves: {[m[0] for m in moves]}")
+        print(
+            f"[BATTLE] Lead: {gs.party_pokemon[0].get('species_name', '?')}  "
+            f"Moves: {[m[0] for m in moves]}"
+        )
 
     for turn in range(1, MAX_TURNS + 1):
         if not bc.is_in_battle():
@@ -74,9 +77,9 @@ def _run_agent(pyboy) -> None:
     with open(SAVE_STATE, "rb") as f:
         pyboy.load_state(f)
 
-    gs         = PokemonGameState(pyboy)
+    gs = PokemonGameState(pyboy)
     controller = AutonomousController(pyboy, gs, GRAPH, starter=STARTER)
-    bc         = BattleController(pyboy, gs)
+    bc = BattleController(pyboy, gs)
 
     print("=" * 60)
     print("  DeepRed — Autonomous Pokemon Red Agent")

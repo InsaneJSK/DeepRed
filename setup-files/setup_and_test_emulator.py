@@ -3,6 +3,7 @@ This script tests the PyBoy emulator setup by loading a save state and simulatin
 """
 
 import os
+
 import keyboard
 from pyboy import PyBoy
 from pyboy.utils import WindowEvent  # pylint: disable=no-name-in-module
@@ -21,9 +22,11 @@ with open(SAVE_STATE_PATH, "rb") as f:
 
 print("[INFO] Save state loaded. Player should be in room.")
 
+
 # --- Controller Wrapper ---
 class ControllerTest:  # pylint: disable=too-few-public-methods
     """A simple wrapper to simulate button presses with timing."""
+
     def __init__(self, pyboy):
         self.pyboy = pyboy
         self.release_map = {
@@ -42,6 +45,7 @@ class ControllerTest:  # pylint: disable=too-few-public-methods
         for _ in range(frames):
             self.pyboy.tick()
         self.pyboy.send_input(self.release_map[button])
+
 
 # --- Instantiate controller ---
 controller = ControllerTest(state)

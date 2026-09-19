@@ -34,10 +34,11 @@ world_graph.json schema:
 }
 """
 
-import re
-import json
 import argparse
+import json
+import re
 from pathlib import Path
+
 
 # Parse map ID constants from constants/map_constants.asm
 def parse_map_constants(pokered_root: Path) -> dict[str, int]:
@@ -58,7 +59,7 @@ def parse_map_constants(pokered_root: Path) -> dict[str, int]:
     # map_const PALLET_TOWN, 5, 6   -> outdoor maps
     # map_const REDS_HOUSE_1F, 4, 4 -> indoor maps
     # The file assigns IDs sequentially; we just count them.
-    map_const_re = re.compile(r'^\s*map_const\s+([A-Z0-9_]+)', re.IGNORECASE)
+    map_const_re = re.compile(r"^\s*map_const\s+([A-Z0-9_]+)", re.IGNORECASE)
 
     with open(constants_file, encoding="utf-8") as f:
         for line in f:
@@ -71,7 +72,9 @@ def parse_map_constants(pokered_root: Path) -> dict[str, int]:
 
     return map_id
 
+
 # Parse warp_event entries from data/maps/objects/*.asm
+
 
 def _get_map_name(lines: list[str], warps_to_re: re.Pattern) -> str | None:
     for line in lines:
@@ -86,13 +89,15 @@ def _parse_warp_events(lines: list[str], warp_re: re.Pattern) -> list[dict]:
     for line in lines:
         m = warp_re.match(line)
         if m:
-            warp_list.append({
-                "warp_index": len(warp_list),
-                "x": int(m.group(1)),
-                "y": int(m.group(2)),
-                "dest_map": m.group(3).upper(),
-                "dest_warp_index": int(m.group(4)),
-            })
+            warp_list.append(
+                {
+                    "warp_index": len(warp_list),
+                    "x": int(m.group(1)),
+                    "y": int(m.group(2)),
+                    "dest_map": m.group(3).upper(),
+                    "dest_warp_index": int(m.group(4)),
+                }
+            )
     return warp_list
 
 
@@ -104,17 +109,13 @@ def parse_warps(pokered_root: Path) -> dict[str, list[dict]]:
     warps: dict[str, list[dict]] = {}
 
     warp_re = re.compile(
-        r'^\s*warp_event\s+(\d+)\s*,\s*(\d+)\s*,\s*([A-Z0-9_]+)\s*,\s*(\d+)',
-        re.IGNORECASE
+        r"^\s*warp_event\s+(\d+)\s*,\s*(\d+)\s*,\s*([A-Z0-9_]+)\s*,\s*(\d+)", re.IGNORECASE
     )
-    warps_to_re = re.compile(
-        r'^\s*def_warps_to\s+([A-Z0-9_]+)',
-        re.IGNORECASE
-    )
+    warps_to_re = re.compile(r"^\s*def_warps_to\s+([A-Z0-9_]+)", re.IGNORECASE)
 
     for asm_file in sorted(objects_dir.glob("*.asm")):
         with open(asm_file, encoding="utf-8") as f:
-            lines = [l.split(";")[0] for l in f]
+            lines = [line.split(";")[0] for line in f]
 
         current_map = _get_map_name(lines, warps_to_re)
         if current_map is None:
@@ -124,7 +125,9 @@ def parse_warps(pokered_root: Path) -> dict[str, list[dict]]:
 
     return warps
 
+
 # Parse connection entries from data/maps/headers/*.asm
+
 
 def _parse_header_file(
     asm_file: Path,
@@ -174,12 +177,10 @@ def parse_connections(pokered_root: Path) -> dict[str, dict]:
     if not headers_dir.exists():
         raise FileNotFoundError(f"Cannot find {headers_dir}")
 
-    header_re = re.compile(
-        r'^\s*map_header\s+\w+\s*,\s*([A-Z0-9_]+)', re.IGNORECASE
-    )
+    header_re = re.compile(r"^\s*map_header\s+\w+\s*,\s*([A-Z0-9_]+)", re.IGNORECASE)
     conn_re = re.compile(
-        r'^\s*connection\s+(north|south|east|west)\s*,\s*\w+\s*,\s*([A-Z0-9_]+)\s*,\s*(-?\d+)',
-        re.IGNORECASE
+        r"^\s*connection\s+(north|south|east|west)\s*,\s*\w+\s*,\s*([A-Z0-9_]+)\s*,\s*(-?\d+)",
+        re.IGNORECASE,
     )
 
     connections: dict[str, dict] = {}
@@ -190,7 +191,9 @@ def parse_connections(pokered_root: Path) -> dict[str, dict]:
 
     return connections
 
+
 # Step 4: Assemble world_graph.json
+
 
 def build_graph(pokered_root: Path) -> dict:
     """
@@ -213,16 +216,12 @@ def build_graph(pokered_root: Path) -> dict:
     print("[4/4] Assembling graph...")
 
     # Union of all known map names
-    all_map_names = (
-        set(map_name_to_id.keys())
-        | set(all_warps.keys())
-        | set(all_connections.keys())
-    )
+    all_map_names = set(map_name_to_id.keys()) | set(all_warps.keys()) | set(all_connections.keys())
 
     maps: dict[str, dict] = {}
     for name in sorted(all_map_names):
         entry = {
-            "id": map_name_to_id.get(name, -1),   # -1 = not in constants
+            "id": map_name_to_id.get(name, -1),  # -1 = not in constants
             "name": name,
             "warps": all_warps.get(name, []),
             "connections": all_connections.get(name, {}),
@@ -247,10 +246,11 @@ def build_graph(pokered_root: Path) -> dict:
 
     return graph
 
+
 def resolve_last_map(warps: dict[str, list[dict]]) -> dict[str, list[dict]]:
     """
     Replace LAST_MAP destinations with the actual map name.
-    
+
     LAST_MAP is used for exit warps (doors to outside). The real destination
     is the map that has a warp pointing INTO this map — i.e. if MAP_B has a
     warp to MAP_A, then MAP_A's LAST_MAP warps resolve to MAP_B.
@@ -276,14 +276,18 @@ def resolve_last_map(warps: dict[str, list[dict]]) -> dict[str, list[dict]]:
                     warp["dest_map"] = next(iter(candidates))
                 elif len(candidates) > 1:
                     warp["dest_map"] = sorted(candidates)[0]
-                    print(f"[WARN] {src_map} LAST_MAP ambiguous: {candidates},\
-                         chose {warp['dest_map']}")
+                    print(
+                        f"[WARN] {src_map} LAST_MAP ambiguous: {candidates},\
+                         chose {warp['dest_map']}"
+                    )
                 else:
                     print(f"[WARN] {src_map} LAST_MAP unresolvable — no incoming warps found")
 
     return warps
 
+
 # Entrypoint
+
 
 def main():
     """Main entrypoint: parse args, build graph, write JSON."""

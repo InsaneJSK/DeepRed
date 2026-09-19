@@ -3,10 +3,13 @@ Module to read miscellaneous game information like player names, coins, and poke
 """
 
 import pprint
+
 from memory_state.memory_reader import MemoryReader, convert_text
+
 
 class MiscInfo:
     """Class to read miscellaneous game information like player names, coins, and pokedex count."""
+
     def __init__(self, pyby):
         """Initialize with a PyBoy memory view object"""
         self.pyboy = pyby

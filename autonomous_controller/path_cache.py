@@ -47,8 +47,10 @@ class PathCache:
     def get_optimal_path(
         self,
         map_name: str,
-        cx: int, cy: int,
-        gx: int, gy: int,
+        cx: int,
+        cy: int,
+        gx: int,
+        gy: int,
     ) -> list[str] | None:
         """
         If this goal is known reachable on map_name, return a fresh
@@ -85,10 +87,10 @@ class PathCache:
         """Optimal path: vertical steps first, then horizontal."""
         dirs: list[str] = []
         dy, dx = gy - cy, gx - cx
-        dirs += ["up"]    * max(0, -dy)
-        dirs += ["down"]  * max(0,  dy)
-        dirs += ["left"]  * max(0, -dx)
-        dirs += ["right"] * max(0,  dx)
+        dirs += ["up"] * max(0, -dy)
+        dirs += ["down"] * max(0, dy)
+        dirs += ["left"] * max(0, -dx)
+        dirs += ["right"] * max(0, dx)
         return dirs
 
     def _load(self) -> None:
@@ -103,8 +105,7 @@ class PathCache:
                     if "\u2192" in k:
                         # Old format — drop it; will be re-learned
                         continue
-                    cleaned[k] = {"runs": v.get("runs", 0),
-                                  "locked": v.get("locked", False)}
+                    cleaned[k] = {"runs": v.get("runs", 0), "locked": v.get("locked", False)}
                 self._data = cleaned
                 print(f"[CACHE] Loaded {len(self._data)} goal(s) from {self._file}")
             except (json.JSONDecodeError, OSError) as exc:
