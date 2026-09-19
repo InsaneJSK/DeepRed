@@ -1,51 +1,38 @@
-"""
-autonomous_controller/pathfinder.py
-
-A* tile-level pathfinder.  Used by NavAstar to plan routes within a single map.
-"""
-
+"""Bounded A* with parent pointers and directional edge constraints."""
 import heapq
+from autonomous_controller.constants import DIRECTIONS
 
 
-def _heuristic(ax: int, ay: int, bx: int, by: int) -> int:
-    return abs(ax - bx) + abs(ay - by)
-
-
-def astar( #pylint: disable=too-many-arguments, too-many-locals, too-many-positional-arguments
-    start_x: int, start_y: int,
-    goal_x: int,  goal_y: int,
-    is_passable_fn,
-    max_steps: int = 2000,
-) -> list[str] | None:
-    """
-    A* on a tile grid.
-
-    is_passable_fn(x, y) -> bool
-    Returns list of direction strings ("up"/"down"/"left"/"right"), or None
-    if no path exists within max_steps node expansions.
-    """
-    from autonomous_controller.constants import DIRECTIONS  # local import avoids cycle #pylint: disable=import-outside-toplevel
-
-    open_heap = [(_heuristic(start_x, start_y, goal_x, goal_y), 0, start_x, start_y, [])]
-    visited: set[tuple[int, int]] = set()
-
-    while open_heap:
-        _, cost, x, y, path = heapq.heappop(open_heap)
-        if (x, y) in visited:
+def astar(start_x, start_y, goal_x, goal_y, is_passable_fn, max_steps=20000,
+          can_step=None):
+    start, goal = (start_x, start_y), (goal_x, goal_y)
+    if start == goal:
+        return []
+    if not is_passable_fn(*goal):
+        return None
+    def heuristic(pos):
+        return abs(pos[0]-goal_x) + abs(pos[1]-goal_y)
+    queue = [(heuristic(start), 0, start)]
+    costs, parents = {start: 0}, {}
+    expanded = 0
+    while queue and expanded < max_steps:
+        _, cost, pos = heapq.heappop(queue)
+        if costs.get(pos) != cost:
             continue
-        visited.add((x, y))
-
-        if x == goal_x and y == goal_y:
-            return path
-
-        if cost >= max_steps:
-            continue
-
+        expanded += 1
+        if pos == goal:
+            path = []
+            while pos != start:
+                pos, direction = parents[pos]
+                path.append(direction)
+            return path[::-1]
         for direction, (dx, dy, _, _) in DIRECTIONS.items():
-            nx, ny = x + dx, y + dy
-            if (nx, ny) not in visited and is_passable_fn(nx, ny):
-                new_cost = cost + 1
-                priority = new_cost + _heuristic(nx, ny, goal_x, goal_y)
-                heapq.heappush(open_heap, (priority, new_cost, nx, ny, path + [direction]))
-
+            nxt = (pos[0]+dx, pos[1]+dy)
+            if not is_passable_fn(*nxt) or (can_step and not can_step(*pos, *nxt)):
+                continue
+            new_cost = cost + 1
+            if new_cost < costs.get(nxt, float('inf')):
+                costs[nxt] = new_cost
+                parents[nxt] = (pos, direction)
+                heapq.heappush(queue, (new_cost+heuristic(nxt), new_cost, nxt))
     return None

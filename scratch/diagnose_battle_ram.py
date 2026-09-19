@@ -5,7 +5,7 @@ RAM-address diagnostic tool for the battle controller redesign.
 
 Usage
 -----
-    python scratch/diagnose_battle_ram.py
+    uv run python -X utf8 scratch/diagnose_battle_ram.py
 
 1. The emulator opens at the oak-room-battle save state.
 2. Walk into grass to trigger a battle (use arrow keys in the SDL2 window).
@@ -39,7 +39,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from pyboy import PyBoy
 from pyboy.utils import WindowEvent
 from memory_state.game_state import PokemonGameState
-import keyboard  # pip install keyboard
+import keyboard
 
 SAVE_STATE = "saves/oak-room-battle.state"
 ROM_PATH   = "Pokemon_Red/Red.gb"

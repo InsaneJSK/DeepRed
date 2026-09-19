@@ -8,7 +8,7 @@ navigate_to_tile can skip the dodge pass and re-plan A* from the real position.
 """
 from pyboy.utils import WindowEvent  # pylint: disable=no-name-in-module
 class BattleInterrupt(Exception):
-    """Raised when a battle starts during navigation.  go_to() catches this."""
+    """Raised when a battle starts; the caller must handle combat and resume."""
 class InterruptHandler:
     """
     Handles interrupts during navigation.
@@ -161,7 +161,12 @@ class InterruptHandler:
             print(f"  [INT] Dialogue still active after {self.MAX_A_PRESSES} presses — giving up")
         # Wait for any scripted NPC movement to finish
         print("  [INT] Stabilising player position…")
-        pos_after = self._stabilize()
+        # Script sequences can pause longer than the old 40-frame stability
+        # window between text boxes. Wait through these gaps before moving.
+        if not self.wait_for_control():
+            self.was_displaced = True
+            return
+        pos_after = self._current_pos()
         if pos_after != pos_before:
             print(f"  [INT] Player displaced {pos_before} → {pos_after}")
             self.was_displaced = True

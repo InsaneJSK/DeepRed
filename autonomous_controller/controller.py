@@ -5,8 +5,8 @@ AutonomousController — top-level navigation + action agent.
 
 Architecture
 ------------
-    NavCore       — raw movement primitives (_step, _dodge, press, etc.)
-    NavAstar      — A*-based navigate_to_tile with oscillation/escape
+    NavCore       — bounded steps, live object occupancy, and input
+    NavAstar      — full-map terrain A* with bounded dynamic replanning
     HopExecutor   — map-to-map hop execution (warps + connections)
 
 Interrupt philosophy
@@ -44,7 +44,6 @@ from autonomous_controller.interrupt_handler import InterruptHandler, BattleInte
 from autonomous_controller.nav_core          import NavCore
 from autonomous_controller.nav_astar         import NavAstar
 from autonomous_controller.hop_executor      import HopExecutor
-from autonomous_controller.path_cache        import PathCache
 
 # Starter-picking constants
 # Steps to reach and face each starter's pokeball from the position where
@@ -81,7 +80,9 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
         self.graph     = WorldGraph(graph_path)
         self.rom_pass  = RomPassability(pokered_root)
         self.interrupt = InterruptHandler(pyboy, game_state)
-        self.path_cache = PathCache()   # learns & replays successful paths
+        self.path_cache = None  # Old reachability entries are not safe movement paths.
+        self.nav_stats = {'step_calls': 0, 'blocked_steps': 0}
+        self.last_error = ''
 
         # Starter to auto-pick when locked in Oak's lab during navigation.
         # Override before the first go_to() call if you want a different starter.
@@ -120,12 +121,16 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
         per call chain (guarded by ``_starter_done``).
         """
         destination = destination.upper()
+        self.last_error = ''
 
         try:
+            if self.gs.map['in_battle']:
+                raise BattleInterrupt('Battle active before navigation')
             current = self._map_name()
-            route = self.graph.bfs_route(current, destination)
+            route = self.graph.terrain_route(current, destination, self._pos(), self.rom_pass)
 
             if current is None or route is None:
+                self.last_error = 'No connected walking route from the current region.'
                 print(f"[GO_TO] No route from {current} to {destination}")
                 return False
 
@@ -165,6 +170,9 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
                     # ── end fallback ──────────────────────────────────────────
 
                     print(f"        Current: {self._pos()}, map: {current_map}")
+                    self.last_error = ('A game script moved or stopped the player.'
+                                       if self.interrupt.was_displaced else
+                                       'No reachable entrance or crossing; check objects and story gates.')
                     return False   # AI agent decides what happens next
 
                 # Settle after each map transition
@@ -179,13 +187,9 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
             return arrived
 
         except BattleInterrupt as exc:
-            # Destination reached just before battle started
-            if self._map_name() == destination:
-                print(f"[GO_TO] Arrived at {destination} (battle started on arrival).")
-                return True
             print(f"[GO_TO] Battle interrupt — navigation suspended. ({exc})")
             print(f"        Current: {self._pos()}, map: {self._map_name()}")
-            return False
+            raise
 
     # Starter picking
 
@@ -259,7 +263,7 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
             party = self.gs.party_pokemon
             if any(p.get("species_name", "").upper() == target for p in party):
                 print(f"[STARTER] {pokemon.title()} acquired after {attempt} A press(es)!")
-                return True
+                return self.interrupt.wait_for_control()
             self.press(WindowEvent.PRESS_BUTTON_A)
 
         print(f"[STARTER] Timed out — {pokemon} not in party after 300 A presses.")

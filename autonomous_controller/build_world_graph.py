@@ -4,7 +4,7 @@ build_world_graph.py
 Parses the pret/pokered disassembly to produce world_graph.json.
 
 Usage:
-    python autonomous_controller/build_world_graph.py --pokered pokered --output world_graph.json
+    uv run python -X utf8 autonomous_controller/build_world_graph.py --pokered pokered --output world_graph.json
 
 Output: world_graph.json in the current directory.
 

@@ -1,0 +1,21 @@
+[project]
+name = "deepred"
+version = "0.1.0"
+description = "RAM-aware autonomous navigation and gameplay for Pokemon Red using PyBoy"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "keyboard==0.13.5",
+    "numpy==2.4.0",
+    "pillow==12.1.0",
+    "pyboy==2.7.0",
+]
+
+[dependency-groups]
+dev = ["pylint==4.0.5"]
+notebooks = ["ipykernel==7.2.0"]
+
+[tool.uv]
+package = false
+# Preserve the SDL runtime used by the verified emulator baseline.
+constraint-dependencies = ["pysdl2==0.9.17", "pysdl2-dll==2.32.0"]

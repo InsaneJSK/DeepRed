@@ -64,3 +64,37 @@ class WorldGraph:
                     visited.add(neighbor)
                     queue.append(new_path)
         return None
+
+    def terrain_route(self, src, dst, position, terrain):
+        """BFS over map *regions*, preventing routes through inaccessible entrances."""
+        from autonomous_controller.constants import COMPASS_TO_ARROW
+        region = terrain.components(src).get(position)
+        if region is None:
+            return None
+        start = (src, region)
+        queue, visited = deque([(start, [src])]), {start}
+        while queue:
+            (name, region), path = queue.popleft()
+            if name == dst:
+                return path
+            edges = []
+            for warp in self.warps(name):
+                if terrain.components(name).get((warp['x'], warp['y'])) != region:
+                    continue
+                dest = warp['dest_map']
+                index = warp['dest_warp_index'] - 1
+                warps = self.warps(dest)
+                if 0 <= index < len(warps):
+                    landing = (warps[index]['x'], warps[index]['y'])
+                    edges.append((dest, terrain.components(dest).get(landing)))
+            for compass, conn in self.connections(name).items():
+                dest = conn['map']
+                for border, landing in terrain.connection_tiles(
+                        name, dest, COMPASS_TO_ARROW[compass], conn.get('offset', 0)):
+                    if terrain.components(name).get(border) == region:
+                        edges.append((dest, terrain.components(dest).get(landing)))
+            for edge in edges:
+                if edge[1] is not None and edge not in visited:
+                    visited.add(edge)
+                    queue.append((edge, path + [edge[0]]))
+        return None

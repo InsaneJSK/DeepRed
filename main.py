@@ -14,24 +14,20 @@ To change the starter or goal, edit the CONFIG block below.
 from pyboy import PyBoy
 from autonomous_controller import AutonomousController, BattleController, BattleInterrupt
 from memory_state.game_state import PokemonGameState
+from autonomous_controller.emulator_session import EmulatorClosed, EmulatorSession
 
-# ---------------------------------------------------------------------------
 # CONFIG
-# ---------------------------------------------------------------------------
 ROM        = "Pokemon_Red/Red.gb"
 SAVE_STATE = "saves/in-room-start.state"
 GRAPH      = "world_graph.json"
 STARTER    = "charmander"   # "bulbasaur" | "charmander" | "squirtle"
-GOAL       = "ROUTE_1"
+GOAL       = "VIRIDIAN_CITY"
 MAX_TURNS  = 50             # safety cap per battle
 
 
-# ---------------------------------------------------------------------------
 # Battle loop (called whenever a battle is detected)
-# ---------------------------------------------------------------------------
-
 def _run_battle_loop(bc: BattleController, gs: PokemonGameState) -> None:
-    """Fight every turn with move 0 until the battle ends."""
+    """Flee wild encounters during travel; fight required trainer battles."""
     b_type = {1: "WILD", 2: "TRAINER"}.get(gs.mem.read_byte(0xD057), "BATTLE")
     print(f"\n[BATTLE] {b_type} started!")
     if gs.party_pokemon:
@@ -50,8 +46,12 @@ def _run_battle_loop(bc: BattleController, gs: PokemonGameState) -> None:
             else:
                 print("[BATTLE] Timed out waiting for menu — aborting.")
             break
-        print(f"[BATTLE] Turn {turn} — fight(move_index=0)")
-        bc.fight(move_index=0)
+        if bc.is_wild_battle():
+            print(f"[BATTLE] Turn {turn} — attempting escape")
+            bc.run()
+        else:
+            print(f"[BATTLE] Turn {turn} — fight(move_index=0)")
+            bc.fight(move_index=0)
 
     # Advance XP-gain / level-up text until back in the overworld
     print("[BATTLE] Clearing post-battle text…")
@@ -59,12 +59,17 @@ def _run_battle_loop(bc: BattleController, gs: PokemonGameState) -> None:
     print(f"[BATTLE] Done. Still in battle: {bc.is_in_battle()}")
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main() -> None:
     pyboy = PyBoy(ROM, window="SDL2")
+    try:
+        _run_agent(EmulatorSession(pyboy))
+    except (EmulatorClosed, KeyboardInterrupt):
+        print("\n[AGENT] Emulator closed. Exiting.")
+    finally:
+        pyboy.stop(save=False)
+
+
+def _run_agent(pyboy) -> None:
     pyboy.tick()
     with open(SAVE_STATE, "rb") as f:
         pyboy.load_state(f)
@@ -97,14 +102,15 @@ def main() -> None:
             print(f"\n[AGENT] ✓ Reached {GOAL}!")
             break
 
-        print(f"[AGENT] go_to returned False — map: {gs.to_dict().get('map_name')}")
+        print(f"[AGENT] Navigation stopped: {controller.last_error}")
+        break
 
     else:
         print(f"\n[AGENT] ✗ Failed to reach {GOAL} after {MAX_RETRIES} attempts.")
 
-    print("\nKeep window open. Close it to exit.")
-    while True:
-        pyboy.tick()
+    print("\nClose the emulator window or press Ctrl+C in the terminal to exit.")
+    while pyboy.tick():
+        pass
 
 
 if __name__ == "__main__":

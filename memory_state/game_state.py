@@ -47,6 +47,32 @@ class PokemonGameState:
             }
 
     @property
+    def map_objects(self) -> list[dict]:
+        """Current-map sprite records; visibility is separate from map coordinates.
+
+        Off-screen coordinates are retained by the engine, but are not treated
+        as continuously simulated occupancy. No sprite slot zero (player).
+        """
+        objects = []
+        for slot in range(1, 16):
+            first, second = 0xC100 + 16*slot, 0xC200 + 16*slot
+            picture = self.mem.read_byte(first)
+            if not picture:
+                continue
+            def signed(address):
+                value = self.mem.read_byte(address)
+                return value if value < 128 else value-256
+            objects.append({
+                'slot': slot, 'picture_id': picture,
+                'x': self.mem.read_byte(second+5)-4,
+                'y': self.mem.read_byte(second+4)-4,
+                'visible': self.mem.read_byte(first+2) != 0xFF,
+                'moving': self.mem.read_byte(first+1) == 3,
+                'dx': signed(first+5), 'dy': signed(first+3),
+            })
+        return objects
+
+    @property
     def money(self) -> int:
         """Read the player's money in Binary Coded Decimal format"""
         b1 = self.mem.read_byte(0xD349)  # Least significant byte
@@ -122,7 +148,7 @@ class PokemonGameState:
 
             # Read nickname
             nickname = convert_text(
-                self.mem.read_bytes(nickname_addresses[i], nickname_addresses[i] + 11)
+                self.mem.read_bytes(nickname_addresses[i], 11)
             )
 
             type1 = PokemonType(self.mem.read_byte(addr + 5))
@@ -287,6 +313,7 @@ class PokemonGameState:
             # "map_id": self.map_id,
             "map_name": self.map["map_name"],
             "tileset": self.map["tileset"],
+            "map_objects": self.map_objects,
             "player": {
                 "x": self.map["player_x"],
                 "y": self.map["player_y"],

@@ -212,6 +212,9 @@ project-struct.py
 Pokemon_Red/
 cloned/
 saves/
+scratch/*.state
+scratch/navigation_failure.png
+status/
 
 #linting
 lint_report.txt
