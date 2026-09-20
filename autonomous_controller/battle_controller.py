@@ -22,7 +22,7 @@ Main battle menu layout (2×2 grid):
 
     Row  = index // 2   (0=top, 1=bottom)
     Col  = index  % 2   (0=left, 1=right)
-    RIGHT ↔ toggles column, DOWN ↔ toggles row.
+    RIGHT <-> toggles column, DOWN <-> toggles row.
 
 Usage (from AI agent):
     bc = BattleController(pyboy, gs)
@@ -37,12 +37,10 @@ from pyboy.utils import WindowEvent
 
 from autonomous_controller.emulator_session import FrameBudget, FrameLimitReached
 
-# ---------------------------------------------------------------------------
 # RAM addresses (verified against pret/pokered + live diagnostic)
-# ---------------------------------------------------------------------------
 _MENU_CURSOR = 0xCC26  # wCurrentMenuItem  — cursor in current menu
 _SAVED_CURSOR = 0xCC29  # wBattleAndStartSavedMenuItem
-_MOVE_CURSOR = 0xCC2A  # wCurrentMoveNum   — move slot in FIGHT sub-menu
+_MOVE_CURSOR = 0xCC26  # wCurrentMoveNum   — move slot in FIGHT sub-menu
 _PLAYER_MON_SLOT = 0xCC2E  # wPlayerMonNumber  — active party slot (0-indexed)
 _BATTLE_TURN_SIDE = 0xCCD5  # NOT reliable as a turn-indicator (varies by frame)
 _IS_IN_BATTLE = 0xD057  # wIsInBattle: 0=none, 1=wild, 2=trainer
@@ -63,7 +61,6 @@ _TEXT_ADVANCE_EVERY = 20
 class BattleController:
     """
     RAM-driven navigation of Pokemon Red battle menus.
-
     Main-menu detection uses text decoded from RAM; cursor navigation needs further work.
     """
 
@@ -89,9 +86,7 @@ class BattleController:
             WindowEvent.PRESS_BUTTON_B: WindowEvent.RELEASE_BUTTON_B,
         }
 
-    # ------------------------------------------------------------------
     # RAM helpers
-    # ------------------------------------------------------------------
 
     def _r(self, addr: int) -> int:
         """Read one byte from WRAM."""
@@ -116,9 +111,7 @@ class BattleController:
     def _press_b(self) -> None:
         self._press(WindowEvent.PRESS_BUTTON_B)
 
-    # ------------------------------------------------------------------
     # State queries
-    # ------------------------------------------------------------------
 
     def is_in_battle(self) -> bool:
         """True while the battle flag is set."""
@@ -131,14 +124,13 @@ class BattleController:
     def is_player_turn(self) -> bool:
         """
         True when the main FIGHT/PKMN/ITEM/RUN battle menu is visible.
-
         Detected via dialog (VRAM tilemap): both "FIGHT" and "RUN" appear
-        on-screen only when the 2×2 main battle menu is drawn.  They are
+        on-screen only when the 2x2 main battle menu is drawn.  They are
         absent during text boxes, move selection, party screen, and bag.
-
         (wBattleTurnSide / 0xCCD5 turned out to not reliably indicate
         player-turn state across different battle encounters.)
         """
+
         if self._r(_IS_IN_BATTLE) == 0:
             return False
         d = self.gs.dialog.upper()
@@ -150,15 +142,13 @@ class BattleController:
 
     def move_cursor(self) -> int:
         """Current move slot cursor in the FIGHT sub-menu (0-indexed)."""
-        return self._r(_MOVE_CURSOR)
+        return self._r(_MOVE_CURSOR) - 1
 
     def active_mon_slot(self) -> int:
         """Index of the player's currently active Pokémon (0-indexed)."""
         return self._r(_PLAYER_MON_SLOT)
 
-    # ------------------------------------------------------------------
     # Waiting
-    # ------------------------------------------------------------------
 
     def wait_for_turn(self, timeout: int | None = None) -> bool:
         """Wait for the main menu within a total frame budget, advancing text with B."""
@@ -212,22 +202,13 @@ class BattleController:
             pass
         return False
 
-    # Main battle menu navigation (2×2 grid)
-    # ------------------------------------------------------------------
+    # Main battle menu navigation (2x2 grid)
 
     def _navigate_main_menu(self, target: int) -> None:
         """
-        Move the cursor to *target* (0=FIGHT, 1=PKMN, 2=ITEM, 3=RUN).
-
-        Layout:
-            FIGHT(0) | PKMN(1)
-            ITEM(2)  | RUN(3)
-
-        Always resets to FIGHT (top-left) first with UP+LEFT, then navigates
-        to the target.  This avoids the remembered-cursor problem.
+        Navigate the main battle menu to *target* (0-indexed, 0=FIGHT, 1=PKMN, 2=ITEM, 3=RUN).
         """
-        # Reset to FIGHT (top-left corner) — UP and LEFT each wrap within
-        # their axis, so 1 press each is enough for a 2×2 grid.
+
         self._press(WindowEvent.PRESS_ARROW_UP)
         self._press(WindowEvent.PRESS_ARROW_LEFT)
 
@@ -240,28 +221,35 @@ class BattleController:
         if tgt_row == 1:
             self._press(WindowEvent.PRESS_ARROW_DOWN)
 
-    # ------------------------------------------------------------------
     # Move sub-menu navigation (vertical list, 0-3)
-    # ------------------------------------------------------------------
 
     def _navigate_move_menu(self, target: int) -> None:
         """
-        Navigate the FIGHT move list to *target* (0-indexed from the top).
-
-        Gen 1 remembers the last-used move cursor, so the sub-menu can open
-        at any position.  We always reset to the top of the list first (3×UP
-        covers any 4-move list), then press DOWN *target* times.
+        Select an existing move using the observed cursor, with retries bounded.
         """
-        # Reset to top
-        for _ in range(3):
-            self._press(WindowEvent.PRESS_ARROW_UP)
-        # Navigate down to target
-        for _ in range(target):
-            self._press(WindowEvent.PRESS_ARROW_DOWN)
+        move_count = self._r(0xCC28) - 1
 
-    # ------------------------------------------------------------------
+        if not 1 <= move_count <= 4:
+            raise RuntimeError(f"Invalid move count {move_count}")
+
+        if not isinstance(target, int) or not 0 <= target < move_count:
+            raise ValueError(f"Move index must be between 0 and {move_count - 1}, got {target}")
+
+        for _ in range(4):
+            current = self.move_cursor()
+            if not 0 <= current < move_count:
+                raise RuntimeError("Invalid move cursor")
+            if current == target:
+                return
+            button = (
+                WindowEvent.PRESS_ARROW_DOWN if target > current else WindowEvent.PRESS_ARROW_UP
+            )
+            self._press(button)
+
+        if self.move_cursor() != target:
+            raise RuntimeError("Move-menu cursor did not reach the requested move")
+
     # Back to main menu
-    # ------------------------------------------------------------------
 
     def _back_to_main_menu(self) -> bool:
         """
@@ -274,9 +262,7 @@ class BattleController:
             return True
         return self.wait_for_turn()
 
-    # ------------------------------------------------------------------
     # Public battle actions
-    # ------------------------------------------------------------------
 
     def fight(self, move_index: int) -> bool:
         """
