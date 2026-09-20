@@ -25,7 +25,7 @@ dialogue has fully ended and the lab is in a stable state.
 
 Usage
 -----
-    controller = AutonomousController(pyboy, gs, "world_graph.json")
+    controller = AutonomousController(pyboy, gs)
 
     # Navigation
     ok = controller.go_to("OAKS_LAB")
@@ -74,15 +74,14 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):
         self,
         pyboy,
         game_state,
-        graph_path: str,
-        pokered_root: str = "pokered",
+        bundle_path=None,
         starter: str = "charmander",
     ):
         super().__init__()
         self.pyboy = pyboy
         self.gs = game_state
-        self.graph = WorldGraph(graph_path)
-        self.rom_pass = RomPassability(pokered_root)
+        self.graph = WorldGraph(bundle_path)
+        self.rom_pass = RomPassability(bundle_path)
         self.interrupt = InterruptHandler(pyboy, game_state)
         self.nav_stats = {"step_calls": 0, "blocked_steps": 0}
         self.last_error = ""

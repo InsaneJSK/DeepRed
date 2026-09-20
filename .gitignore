@@ -215,6 +215,7 @@ saves/
 scratch/*.state
 scratch/navigation_failure.png
 status/
+pokered/
 
 #linting
 lint_report.txt

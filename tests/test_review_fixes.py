@@ -1,6 +1,5 @@
 """Regressions for failures confirmed during the code review."""
 
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, mock_open, patch
 
@@ -9,9 +8,10 @@ from pyboy.utils import WindowEvent
 
 import main
 from autonomous_controller.battle_controller import BattleController
-from autonomous_controller.build_world_graph import build_graph, resolve_last_map
+from autonomous_controller.build_world_graph import resolve_last_map
 from autonomous_controller.controller import AutonomousController
 from autonomous_controller.emulator_session import EmulatorClosed, open_emulator
+from autonomous_controller.game_data import load_bundle
 from autonomous_controller.hop_executor import HopExecutor
 from autonomous_controller.interrupt_handler import (
     BattleInterrupt,
@@ -159,12 +159,8 @@ def test_dynamic_return_checks_destination_after_approaching_door(door_destinati
         assert hop.last_error == "Return door leads to OTHER, not TARGET"
 
 
-@pytest.mark.integration
 def test_real_cave_returns_and_resolved_warp_indices():
-    root = Path(__file__).resolve().parents[1] / "pokered"
-    if not (root / "constants/map_constants.asm").is_file():
-        pytest.skip("Local pokered checkout required")
-    graph = build_graph(root)
+    graph = load_bundle()["graph"]
     for entrance, outside in [
         ("DIGLETTS_CAVE_ROUTE_2", "ROUTE_2"),
         ("DIGLETTS_CAVE_ROUTE_11", "ROUTE_11"),

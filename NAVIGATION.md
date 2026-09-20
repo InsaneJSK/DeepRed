@@ -1,5 +1,9 @@
 # Navigation rewrite — 8 September 2026
 
+These are historical implementation notes. Current setup uses the checked-in
+navigation bundle, not a runtime pokered checkout or world_graph.json. See
+[README.md](README.md) and [game_data/README.md](game_data/README.md) for current usage.
+
 Navigation now reaches Route 1 and Viridian City through real overworld
 connections. The original room save was exercised through Oak's sequence,
 starter selection, the rival battle, wild encounters, and both north crossings.

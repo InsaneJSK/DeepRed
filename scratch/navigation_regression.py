@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT))
 from pyboy import PyBoy
 
 from autonomous_controller import AutonomousController, BattleController, BattleInterrupt
+from autonomous_controller.game_data import validate_rom
 from main import _run_battle_loop
 from memory_state.game_state import PokemonGameState
 
@@ -51,6 +52,7 @@ def main():
         parser.error(
             "--expect-blocked requires --blocked-map, --blocked-position and --blocked-reason"
         )
+    validate_rom(ROOT / "Pokemon_Red/Red.gb")
     game = PyBoy(str(ROOT / "Pokemon_Red/Red.gb"), window="null", sound_emulated=False)
     game.set_emulation_speed(0)
     p = FrameBudget(game)
@@ -59,7 +61,7 @@ def main():
             p.load_state(f)
         p.tick()
         gs = PokemonGameState(p)
-        controller = AutonomousController(p, gs, str(ROOT / "world_graph.json"))
+        controller = AutonomousController(p, gs)
         battle = BattleController(p, gs)
         for goal in args.goals:
             arrived = False

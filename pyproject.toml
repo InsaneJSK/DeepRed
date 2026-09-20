@@ -43,4 +43,5 @@ pythonpath = ["."]
 addopts = "-ra --strict-markers"
 markers = [
     "integration: requires local game assets or a real emulator",
+    "source_data: optional parity check against the pinned pokered checkout",
 ]

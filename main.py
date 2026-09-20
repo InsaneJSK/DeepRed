@@ -15,12 +15,12 @@ from pyboy import PyBoy
 
 from autonomous_controller import AutonomousController, BattleController, BattleInterrupt
 from autonomous_controller.emulator_session import EmulatorClosed, EmulatorSession
+from autonomous_controller.game_data import validate_rom
 from memory_state.game_state import PokemonGameState
 
 # CONFIG
 ROM = "Pokemon_Red/Red.gb"
 SAVE_STATE = "saves/in-room-start.state"
-GRAPH = "world_graph.json"
 STARTER = "charmander"  # "bulbasaur" | "charmander" | "squirtle"
 GOAL = "VIRIDIAN_CITY"
 MAX_TURNS = 50  # safety cap per battle
@@ -68,6 +68,7 @@ def _run_battle_loop(bc: BattleController, gs: PokemonGameState) -> None:
 
 
 def main() -> None:
+    validate_rom(ROM)
     pyboy = PyBoy(ROM, window="SDL2")
     try:
         _run_agent(EmulatorSession(pyboy))
@@ -83,7 +84,7 @@ def _run_agent(pyboy) -> None:
         pyboy.load_state(f)
 
     gs = PokemonGameState(pyboy)
-    controller = AutonomousController(pyboy, gs, GRAPH, starter=STARTER)
+    controller = AutonomousController(pyboy, gs, starter=STARTER)
     bc = BattleController(pyboy, gs)
 
     print("=" * 60)

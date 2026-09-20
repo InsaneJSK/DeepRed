@@ -1,10 +1,7 @@
 """Regression coverage for terrain semantics, bounded search, routing, and objects."""
 
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
-
-import pytest
 
 from autonomous_controller.nav_astar import NavAstar
 from autonomous_controller.nav_core import NavCore
@@ -13,19 +10,12 @@ from autonomous_controller.walkable_map import RomPassability
 from autonomous_controller.world_graph import WorldGraph
 from memory_state.game_state import PokemonGameState
 
-ROOT = Path(__file__).resolve().parents[1]
 
-
-@pytest.mark.integration
 class TerrainTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        required = [ROOT / "pokered/constants/map_constants.asm", ROOT / "world_graph.json"]
-        missing = [str(path) for path in required if not path.is_file()]
-        if missing:
-            raise unittest.SkipTest("Local navigation assets required: " + ", ".join(missing))
-        cls.terrain = RomPassability(ROOT / "pokered")
-        cls.graph = WorldGraph(ROOT / "world_graph.json")
+        cls.terrain = RomPassability()
+        cls.graph = WorldGraph()
 
     def test_room_dimensions_are_player_steps(self):
         self.assertEqual(

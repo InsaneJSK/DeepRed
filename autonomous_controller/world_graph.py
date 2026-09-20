@@ -1,24 +1,22 @@
 """
 autonomous_controller/world_graph.py
 
-WorldGraph: loads world_graph.json and provides BFS routing,
+WorldGraph: loads the versioned navigation bundle and provides BFS routing,
 warp/connection lookups.
 """
 
-import json
 from collections import deque
+
+from autonomous_controller.game_data import load_bundle
 
 
 class WorldGraph:
     """
-    Loads world_graph.json and provides BFS routing, warp/connection lookups.
+    Loads bundled map data and provides BFS routing and warp/connection lookups.
     """
 
-    def __init__(self, graph_path: str):
-        with open(graph_path, encoding="utf-8") as f:
-            data = json.load(f)
-        if data.get("schema_version") != 2:
-            raise ValueError("World graph is outdated; regenerate it with build_world_graph.py")
+    def __init__(self, bundle_path=None):
+        data = load_bundle(bundle_path)["graph"]
         self.maps: dict = data["maps"]
         self.name_to_id: dict[str, int] = data["map_name_to_id"]
         self.id_to_name: dict[int, str] = {int(k): v for k, v in data["map_id_to_name"].items()}

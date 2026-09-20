@@ -22,16 +22,12 @@ The following local assets are also required; uv does not download game assets:
 
 - `Pokemon_Red/Red.gb`: the matching Pokemon Red ROM.
 - `saves/in-room-start.state`: the existing initial emulator save.
-- `pokered/`: the matching pret/pokered disassembly checkout.
-- `world_graph.json`: the generated world graph.
 
-With pokered present, generate the world graph using the following command.
-Regenerate older graphs after updating: the loader requires schema version 2
-with corrected return-door metadata.
-
-```powershell
-uv run python -X utf8 autonomous_controller/build_world_graph.py --pokered pokered --output world_graph.json
-```
+Navigation loads the checked-in `game_data/pokemon_red.json` bundle. No pokered
+checkout or separately generated world_graph.json is needed to play or run the
+normal navigation tests. The supported ROM SHA-1 is
+`ea9bcae617fdf159b045185467ae58b2e4a48b9a`; the entry point checks it before booting.
+See [game_data/README.md](game_data/README.md) for provenance and optional updates.
 
 ## Run and test
 
@@ -54,11 +50,12 @@ uv run python -X utf8 scratch/navigation_regression.py
 ```
 
 Pytest discovers tests in `tests/`, including the existing unittest tests. Tests
-marked `integration` require local navigation assets or a real emulator; missing
+marked `integration` require a real emulator and local game assets; missing
 required assets are reported as skips, not passes. Run the fast subset with
-`uv run pytest -m "not integration"`, or only integration tests with
+`uv run pytest -m "not integration and not source_data"`, or only integration tests with
 `uv run pytest -m integration`. The full travel regression above is a separate
-script and is not included in pytest discovery.
+script and is not included in pytest discovery. The optional `source_data` check
+verifies bundle regeneration against pokered and skips when that checkout is absent.
 
 The headless travel regression leaves original saves and cartridge RAM unchanged. Add
 `--checkpoint` to retain test checkpoints in `scratch/`.

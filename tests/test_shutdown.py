@@ -16,6 +16,11 @@ from autonomous_controller.emulator_session import EmulatorClosed, EmulatorSessi
 from autonomous_controller.nav_core import NavCore
 
 
+@pytest.fixture(autouse=True)
+def isolate_lifecycle_from_rom_validation(monkeypatch):
+    monkeypatch.setattr(main, "validate_rom", lambda path: None)
+
+
 class ShutdownTests(unittest.TestCase):
     def test_session_forwards_access_and_tick_arguments(self):
         emulator = Mock()
