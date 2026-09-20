@@ -13,9 +13,9 @@ Interrupt philosophy
 --------------------
 When an NPC interrupt fires mid-navigation (e.g. Prof. Oak stops the player),
 the interrupt handler clears the dialogue and waits for the player's position
-to stabilise.  go_to() then returns False so the external AI agent can decide
-what to do next (e.g. call pick_starter()).  Navigation is NOT automatically
-re-tried after an interrupt — that is the AI agent's responsibility.
+to stabilise within a frame budget. Displacement or timeout stops navigation.
+The demo policy can auto-pick a starter when trapped in Oak's lab; otherwise
+the caller decides the next action. BattleInterrupt propagates to the caller.
 
 Starter picking
 ---------------
@@ -36,10 +36,14 @@ Usage
     controller.pick_starter("bulbasaur")
 """
 
-from pyboy.utils import WindowEvent  # pylint: disable=no-name-in-module
+from pyboy.utils import WindowEvent
 
 from autonomous_controller.hop_executor import HopExecutor
-from autonomous_controller.interrupt_handler import BattleInterrupt, InterruptHandler
+from autonomous_controller.interrupt_handler import (
+    BattleInterrupt,
+    ControlTimeout,
+    InterruptHandler,
+)
 from autonomous_controller.nav_astar import NavAstar
 from autonomous_controller.nav_core import NavCore
 from autonomous_controller.walkable_map import RomPassability
@@ -63,7 +67,7 @@ _STARTER_SPECIES: dict[str, str] = {
 }
 
 
-class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=too-many-ancestors
+class AutonomousController(NavCore, NavAstar, HopExecutor):
     """High-level autonomous navigation controller for Pokemon Red."""
 
     def __init__(
@@ -80,7 +84,6 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
         self.graph = WorldGraph(graph_path)
         self.rom_pass = RomPassability(pokered_root)
         self.interrupt = InterruptHandler(pyboy, game_state)
-        self.path_cache = None  # Old reachability entries are not safe movement paths.
         self.nav_stats = {"step_calls": 0, "blocked_steps": 0}
         self.last_error = ""
 
@@ -110,7 +113,9 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
         Returns False if:
           - no route exists
           - a hop fails (NPC displacement, etc.) — caller decides next step
-          - a battle starts mid-navigation (BattleInterrupt propagates up)
+          - control cannot be regained within the frame budget
+
+        BattleInterrupt propagates when combat starts; it does not return False.
 
         Oak's lab fallback
         ------------------
@@ -127,7 +132,13 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
             if self.gs.map["in_battle"]:
                 raise BattleInterrupt("Battle active before navigation")
             current = self._map_name()
-            route = self.graph.terrain_route(current, destination, self._pos(), self.rom_pass)
+            route = self.graph.terrain_route(
+                current,
+                destination,
+                self._pos(),
+                self.rom_pass,
+                last_map=self.graph.map_name(self.gs.mem.read_byte(0xD365)),
+            )
 
             if current is None or route is None:
                 self.last_error = "No connected walking route from the current region."
@@ -167,7 +178,7 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
                     # ── end fallback ──────────────────────────────────────────
 
                     print(f"        Current: {self._pos()}, map: {current_map}")
-                    self.last_error = (
+                    self.last_error = self.last_error or (
                         "A game script moved or stopped the player."
                         if self.interrupt.was_displaced
                         else "No reachable entrance or crossing; check objects and story gates."
@@ -185,6 +196,9 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
                 print(f"[GO_TO] Expected {destination}, at {self._map_name()}")
             return arrived
 
+        except ControlTimeout as exc:
+            self.last_error = str(exc)
+            return False
         except BattleInterrupt as exc:
             print(f"[GO_TO] Battle interrupt — navigation suspended. ({exc})")
             print(f"        Current: {self._pos()}, map: {self._map_name()}")
@@ -235,8 +249,7 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
         #   "Choose your Pokemon!" → player regains control at bag screen.
         print("[STARTER] Waiting for Oak's sequence to finish before moving…")
         if not self.interrupt.wait_for_control():
-            print("[STARTER] Timed out waiting for player control — giving up.")
-            return False
+            raise ControlTimeout("Timed out waiting for control before starter selection")
 
         # Execute movement steps
         for step in _STARTER_STEPS[pokemon]:
@@ -261,7 +274,9 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):  # pylint: disable=t
             party = self.gs.party_pokemon
             if any(p.get("species_name", "").upper() == target for p in party):
                 print(f"[STARTER] {pokemon.title()} acquired after {attempt} A press(es)!")
-                return self.interrupt.wait_for_control()
+                if not self.interrupt.wait_for_control():
+                    raise ControlTimeout("Timed out waiting for dialogue after starter selection")
+                return True
             self.press(WindowEvent.PRESS_BUTTON_A)
 
         print(f"[STARTER] Timed out — {pokemon} not in party after 300 A presses.")

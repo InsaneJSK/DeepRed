@@ -21,6 +21,12 @@ class HopExecutor:
                 candidates.append((len(path), direction, approach))
         for _, direction, approach in sorted(candidates):
             if self.navigate_to_tile(*approach, forbidden_tiles=forbidden):
+                # Gate scripts can update wLastMap as we approach either door.
+                if warp["dest_map"] == "LAST_MAP":
+                    actual = self.graph.map_name(self.gs.mem.read_byte(0xD365))
+                    if actual != dst_map:
+                        self.last_error = f"Return door leads to {actual}, not {dst_map}"
+                        continue
                 self._step(direction)
                 # Indoor exits trigger when walking out of the doorway square,
                 # whereas stairs normally trigger when stepping onto it.
@@ -75,7 +81,10 @@ class HopExecutor:
     def _execute_hop(self, src_map, dst_map):
         # Try every reachable entrance, not only the first warp in file order.
         for warp in self.graph.warps(src_map):
-            if warp["dest_map"] == dst_map:
+            destinations = warp.get("dest_map_candidates", [warp["dest_map"]])
+            if not destinations and warp["dest_map"] == "LAST_MAP":
+                destinations = [self.graph.map_name(self.gs.mem.read_byte(0xD365))]
+            if dst_map in destinations:
                 if self._execute_warp_hop(warp, dst_map):
                     return True
                 if self._map_name() != src_map or self.interrupt.was_displaced:

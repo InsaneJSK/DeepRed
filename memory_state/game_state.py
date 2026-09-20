@@ -349,24 +349,24 @@ class PokemonGameState:
 
 if __name__ == "__main__":
     import keyboard
-    from pyboy import PyBoy
 
-    pyboy = PyBoy("Pokemon_Red/Red.gb", window="SDL2")
-    pyboy.tick()
-    # game = game_wrapper
-    # load your save in the room
-    with open("saves/oak-room-battle.state", "rb") as f:
-        pyboy.load_state(f)
+    from autonomous_controller.emulator_session import open_emulator
 
-    state = PokemonGameState(pyboy)
-
-    print(state.to_dict())
-    print("Press ESC to quit.")
-    ctr = 0
-    while not keyboard.is_pressed("esc"):
+    with open_emulator("Pokemon_Red/Red.gb", window="SDL2") as pyboy:
         pyboy.tick()
-        ctr += 1
-        if ctr % 600 == 0:
-            print(state.pretty_print())
-            # print(game.enabled)
-    pyboy.stop()
+        # game = game_wrapper
+        # load your save in the room
+        with open("saves/oak-room-battle.state", "rb") as f:
+            pyboy.load_state(f)
+
+        state = PokemonGameState(pyboy)
+
+        print(state.to_dict())
+        print("Press ESC to quit.")
+        ctr = 0
+        while not keyboard.is_pressed("esc"):
+            pyboy.tick()
+            ctr += 1
+            if ctr % 600 == 0:
+                print(state.pretty_print())
+                # print(game.enabled)

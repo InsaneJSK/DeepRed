@@ -18,14 +18,15 @@ class MiscInfo:
     @property
     def names(self) -> tuple[str, str]:
         """Read the player's and rival's name"""
-        player_name = convert_text(self.mem.read_bytes(0xD158, 0xD163))
-        rival_name = convert_text(self.mem.read_bytes(0xD34A, 0x07))
+        player_name = convert_text(self.mem.read_bytes(0xD158, 11))
+        rival_name = convert_text(self.mem.read_bytes(0xD34A, 11))
         return player_name, rival_name
 
     @property
     def read_coins(self) -> int:
         """Read game corner coins"""
-        return (self.mem.read_byte(0xD5A4) << 8) + self.mem.read_byte(0xD5A5)
+        high, low = self.mem.read_bytes(0xD5A4, 2)
+        return (high >> 4) * 1000 + (high & 15) * 100 + (low >> 4) * 10 + (low & 15)
 
     @property
     def pokedex_caught_count(self) -> int:

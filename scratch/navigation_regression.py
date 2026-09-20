@@ -28,13 +28,29 @@ class FrameBudget:
         return self.game.tick(count, *args, **kwargs)
 
 
+def verify_expected_block(controller, map_name, position, reason):
+    actual = (controller._map_name(), controller._pos(), controller.last_error)
+    expected = (map_name.upper(), tuple(position), reason)
+    if actual != expected:
+        raise AssertionError(f"Wrong blockage: expected {expected!r}, got {actual!r}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--state", default="saves/in-room-start.state")
     parser.add_argument("--goals", nargs="+", default=["ROUTE_1", "VIRIDIAN_CITY"])
     parser.add_argument("--checkpoint", action="store_true")
     parser.add_argument("--expect-blocked", action="store_true")
+    parser.add_argument("--blocked-map")
+    parser.add_argument("--blocked-position", type=int, nargs=2, metavar=("X", "Y"))
+    parser.add_argument("--blocked-reason")
     args = parser.parse_args()
+    if args.expect_blocked and not all(
+        [args.blocked_map, args.blocked_position is not None, args.blocked_reason]
+    ):
+        parser.error(
+            "--expect-blocked requires --blocked-map, --blocked-position and --blocked-reason"
+        )
     game = PyBoy(str(ROOT / "Pokemon_Red/Red.gb"), window="null", sound_emulated=False)
     game.set_emulation_speed(0)
     p = FrameBudget(game)
@@ -61,6 +77,9 @@ def main():
                 )
                 if not arrived and not battle.is_in_battle():
                     if args.expect_blocked:
+                        verify_expected_block(
+                            controller, args.blocked_map, args.blocked_position, args.blocked_reason
+                        )
                         print("EXPECTED_BLOCK", controller.last_error, flush=True)
                         return
                     raise AssertionError(f"Navigation blocked: {controller.last_error}")

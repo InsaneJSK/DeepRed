@@ -24,6 +24,7 @@ GRAPH = "world_graph.json"
 STARTER = "charmander"  # "bulbasaur" | "charmander" | "squirtle"
 GOAL = "VIRIDIAN_CITY"
 MAX_TURNS = 50  # safety cap per battle
+MAX_STALLED_INTERRUPTS = 8  # interruptions returning to the same map/position
 
 
 # Battle loop (called whenever a battle is detected)
@@ -56,9 +57,13 @@ def _run_battle_loop(bc: BattleController, gs: PokemonGameState) -> None:
             print(f"[BATTLE] Turn {turn} — fight(move_index=0)")
             bc.fight(move_index=0)
 
+    if bc.is_in_battle():
+        print("[BATTLE] Handler stopped before the battle finished.")
+        return
     # Advance XP-gain / level-up text until back in the overworld
     print("[BATTLE] Clearing post-battle text…")
-    bc.clear_post_battle_text(timeout=3000)
+    if not bc.clear_post_battle_text(timeout=3000):
+        raise TimeoutError("Post-battle dialogue did not clear within its frame budget")
     print(f"[BATTLE] Done. Still in battle: {bc.is_in_battle()}")
 
 
@@ -86,19 +91,31 @@ def _run_agent(pyboy) -> None:
     print(f"  Goal: {GOAL}  |  Starter: {STARTER}")
     print("=" * 60)
 
-    MAX_RETRIES = 8
-    for attempt in range(MAX_RETRIES):
+    stalled = 0
+    while True:
         # Handle any battle in progress before navigating
         if bc.is_in_battle():
             _run_battle_loop(bc, gs)
+            if bc.is_in_battle():
+                print("[AGENT] Battle handler could not finish; stopping.")
+                break
             continue
 
-        print(f"\n[AGENT] Attempt {attempt + 1} — go_to({GOAL})…")
+        before = (gs.map["map_id"], gs.map["player_x"], gs.map["player_y"])
+        print(f"\n[AGENT] go_to({GOAL})…")
         try:
             ok = controller.go_to(GOAL)
         except BattleInterrupt:
             print("[AGENT] BattleInterrupt mid-navigation.")
             _run_battle_loop(bc, gs)
+            if bc.is_in_battle():
+                print("[AGENT] Battle handler could not finish; stopping.")
+                break
+            after = (gs.map["map_id"], gs.map["player_x"], gs.map["player_y"])
+            stalled = stalled + 1 if after == before else 0
+            if stalled >= MAX_STALLED_INTERRUPTS:
+                print("[AGENT] Repeated interruptions without travel progress; stopping.")
+                break
             continue
 
         if ok:
@@ -107,9 +124,6 @@ def _run_agent(pyboy) -> None:
 
         print(f"[AGENT] Navigation stopped: {controller.last_error}")
         break
-
-    else:
-        print(f"\n[AGENT] ✗ Failed to reach {GOAL} after {MAX_RETRIES} attempts.")
 
     print("\nClose the emulator window or press Ctrl+C in the terminal to exit.")
     while pyboy.tick():

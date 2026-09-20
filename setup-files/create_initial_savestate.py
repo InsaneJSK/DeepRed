@@ -1,21 +1,11 @@
-"""
-This file is used to create the initial savestate for the agent to start in the room.
-"""
+"""Compatibility entry point; input and a new output path must be explicit."""
 
-from pyboy import PyBoy
+import sys
+from pathlib import Path
 
-pyboy = PyBoy("Pokemon_Red\\Red.gb", window="SDL2")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-with open("saves\\oak-room-battle.state", "rb") as f:
-    pyboy.load_state(f)
-# Iteratively saved the state until player is in room
+from autonomous_controller.save_state import main
 
-# Let emulator boot and player be in room
-for _ in range(600):
-    pyboy.tick()
-
-# Save state correctly
-with open("saves\\oak-room-battle.state", "wb") as f:
-    pyboy.save_state(f)
-
-pyboy.stop()
+if __name__ == "__main__":
+    main()

@@ -25,7 +25,9 @@ The following local assets are also required; uv does not download game assets:
 - `pokered/`: the matching pret/pokered disassembly checkout.
 - `world_graph.json`: the generated world graph.
 
-With pokered present, the world graph can be regenerated using:
+With pokered present, generate the world graph using the following command.
+Regenerate older graphs after updating: the loader requires schema version 2
+with corrected return-door metadata.
 
 ```powershell
 uv run python -X utf8 autonomous_controller/build_world_graph.py --pokered pokered --output world_graph.json
@@ -60,6 +62,23 @@ script and is not included in pytest discovery.
 
 The headless travel regression leaves original saves and cartridge RAM unchanged. Add
 `--checkpoint` to retain test checkpoints in `scratch/`.
+
+An expected story-gate failure must specify the exact map, position, and reason;
+an unrelated navigation failure will fail the regression:
+
+```powershell
+uv run python -X utf8 scratch/navigation_regression.py --goals VIRIDIAN_FOREST --expect-blocked --blocked-map VIRIDIAN_CITY --blocked-position 19 10 --blocked-reason "A game script moved or stopped the player."
+```
+
+To create a separate manual-testing checkpoint, provide an input and a new
+output filename. Existing files are never overwritten:
+
+```powershell
+uv run python -m autonomous_controller.save_state --input saves/in-room-start.state --output saves/new-checkpoint.state --frames 600
+```
+
+Manual emulator helpers now honor window closure and do not write cartridge RAM
+on exit. Closing before checkpoint creation cancels the operation.
 
 ## Development
 

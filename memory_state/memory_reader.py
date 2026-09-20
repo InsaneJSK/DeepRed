@@ -86,17 +86,14 @@ def convert_text(bytes_data: list[int]) -> str:
             result.append(chr(b - 0xA0 + ord("a")))
         elif 0xF6 <= b <= 0xFF:  # Numbers 0-9
             result.append(str(b - 0xF6))
-        elif 0xF6 <= b <= 0xFF:
-            result.append(str(b - 0xF6))
         else:
             result.append(CHAR_MAP.get(b, f"[{b:02X}]"))
     return "".join(result).strip()
 
 
 if __name__ == "__main__":
-    from pyboy import PyBoy
+    from autonomous_controller.emulator_session import open_emulator
 
-    pyboy_sample = PyBoy("Pokemon_Red/Red.gb")
-    m = MemoryReader(pyboy_sample)
-
-    print(hex(m.read_byte(0xD000)))
+    with open_emulator("Pokemon_Red/Red.gb") as pyboy_sample:
+        m = MemoryReader(pyboy_sample)
+        print(hex(m.read_byte(0xD000)))

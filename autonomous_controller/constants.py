@@ -4,7 +4,7 @@ autonomous_controller/constants.py
 Shared constants: direction vocabulary, RAM addresses, compass mapping.
 """
 
-from pyboy.utils import WindowEvent  # pylint: disable=no-name-in-module
+from pyboy.utils import WindowEvent
 
 # ---------------------------------------------------------------------------
 # RAM addresses
@@ -22,13 +22,6 @@ DIRECTIONS: dict[str, tuple[int, int, int, int]] = {
     "down": (0, 1, WindowEvent.PRESS_ARROW_DOWN, WindowEvent.RELEASE_ARROW_DOWN),
     "left": (-1, 0, WindowEvent.PRESS_ARROW_LEFT, WindowEvent.RELEASE_ARROW_LEFT),
     "right": (1, 0, WindowEvent.PRESS_ARROW_RIGHT, WindowEvent.RELEASE_ARROW_RIGHT),
-}
-
-OPPOSITE: dict[str, str] = {
-    "up": "down",
-    "down": "up",
-    "left": "right",
-    "right": "left",
 }
 
 # pokered connection headers use compass — translate once here

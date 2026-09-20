@@ -48,10 +48,6 @@ class NavCore:
         result.discard(self._pos())
         return result
 
-    def _build_passable_fn(self):
-        name, occupied = self._map_name(), self._occupied_tiles()
-        return lambda x, y: (x, y) not in occupied and self.rom_pass.is_passable(name, x, y)
-
     def _wait_for_map_change(self, expected_map_id, timeout=0):
         for _ in range(timeout or self.WARP_WAIT_FRAMES):
             if self._map_id() == expected_map_id:

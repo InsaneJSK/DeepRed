@@ -68,7 +68,6 @@ for state in [
         if state == "saves/in-room-start.state":
             wrapped = BoundedEmulator(p)
             c = AutonomousController(wrapped, gs, str(ROOT / "world_graph.json"))
-            c.path_cache = None
             c._debug = lambda *args: None
             print("GRAPH_ROUTE", c.graph.bfs_route(c._map_name(), "VIRIDIAN_FOREST"), flush=True)
             try:

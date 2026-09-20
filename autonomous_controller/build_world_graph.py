@@ -206,7 +206,13 @@ def build_graph(pokered_root: Path) -> dict:
 
     print("[2/4] Parsing warp events from objects/...")
     all_warps = parse_warps(pokered_root)
-    all_warps = resolve_last_map(all_warps)
+    # CheckIfInOutsideMap uses the tileset, not the incoming-map sort order.
+    outside_maps = set()
+    for header in (pokered_root / "data/maps/headers").glob("*.asm"):
+        match = re.search(r"map_header\s+\w+,\s*(\w+),\s*(\w+)", header.read_text())
+        if match and match[2] in {"OVERWORLD", "PLATEAU"}:
+            outside_maps.add(match[1])
+    all_warps = resolve_last_map(all_warps, outside_maps)
     print(f"      Found warp data for {len(all_warps)} maps.")
 
     print("[3/4] Parsing connections from headers/...")
@@ -233,12 +239,13 @@ def build_graph(pokered_root: Path) -> dict:
     for _, entry in maps.items():
         for warp in entry["warps"]:
             dest = warp["dest_map"]
-            if dest not in maps:
+            if dest != "LAST_MAP" and dest not in maps:
                 missing_dests.add(dest)
     if missing_dests:
         print(f"  [WARN] {len(missing_dests)} unknown warp destinations: {missing_dests}")
 
     graph = {
+        "schema_version": 2,
         "maps": maps,
         "map_name_to_id": map_name_to_id,
         "map_id_to_name": {str(k): v for k, v in map_id_to_name.items()},
@@ -247,13 +254,12 @@ def build_graph(pokered_root: Path) -> dict:
     return graph
 
 
-def resolve_last_map(warps: dict[str, list[dict]]) -> dict[str, list[dict]]:
+def resolve_last_map(warps: dict[str, list[dict]], outside_maps: set[str]) -> dict[str, list[dict]]:
     """
-    Replace LAST_MAP destinations with the actual map name.
+    Resolve unique exterior return doors; retain runtime-dependent destinations.
 
-    LAST_MAP is used for exit warps (doors to outside). The real destination
-    is the map that has a warp pointing INTO this map — i.e. if MAP_B has a
-    warp to MAP_A, then MAP_A's LAST_MAP warps resolve to MAP_B.
+    Only exterior maps with a reciprocal entrance at the destination warp index
+    are candidates. Interior cave/stair entrances cannot be return destinations.
     """
     # Build reverse lookup: for each map, which maps warp into it?
     # incoming[MAP_A] = set of maps that have a warp_event pointing to MAP_A
@@ -261,27 +267,52 @@ def resolve_last_map(warps: dict[str, list[dict]]) -> dict[str, list[dict]]:
     for src_map, warp_list in warps.items():
         for warp in warp_list:
             dest = warp["dest_map"]
-            if dest == "LAST_MAP":
+            if dest == "LAST_MAP" or src_map not in outside_maps:
                 continue
             if dest not in incoming:
                 incoming[dest] = set()
             incoming[dest].add(src_map)
 
     # Resolve LAST_MAP
+    def reaches(entrance, target):
+        pending, seen = [entrance], set()
+        while pending:
+            name = pending.pop()
+            if name == target:
+                return True
+            if name in seen or name in outside_maps or name == "LAST_MAP":
+                continue
+            seen.add(name)
+            pending.extend(w["dest_map"] for w in warps.get(name, []))
+        return False
+
     for src_map, warp_list in warps.items():
         for warp in warp_list:
             if warp["dest_map"] == "LAST_MAP":
-                candidates = incoming.get(src_map, set())
+                index = warp["dest_warp_index"] - 1
+                candidates = {
+                    name
+                    for name in incoming.get(src_map, set())
+                    if 0 <= index < len(warps[name]) and warps[name][index]["dest_map"] == src_map
+                }
+                if not candidates:
+                    # Upper floors can return directly outside the whole building.
+                    candidates = {
+                        name
+                        for name in outside_maps
+                        if 0 <= index < len(warps.get(name, []))
+                        and reaches(warps[name][index]["dest_map"], src_map)
+                    }
                 if len(candidates) == 1:
                     warp["dest_map"] = next(iter(candidates))
                 elif len(candidates) > 1:
-                    warp["dest_map"] = sorted(candidates)[0]
-                    print(
-                        f"[WARN] {src_map} LAST_MAP ambiguous: {candidates},\
-                         chose {warp['dest_map']}"
-                    )
+                    warp["dest_map_candidates"] = sorted(candidates)
                 else:
-                    print(f"[WARN] {src_map} LAST_MAP unresolvable — no incoming warps found")
+                    warp["dest_map_candidates"] = []
+                    warp["resolution_error"] = (
+                        "No known exterior entrance; runtime destination required"
+                    )
+                    print(f"[WARN] {src_map}: unresolved exterior return warp {index + 1}")
 
     return warps
 

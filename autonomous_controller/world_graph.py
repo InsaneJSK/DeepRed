@@ -17,6 +17,8 @@ class WorldGraph:
     def __init__(self, graph_path: str):
         with open(graph_path, encoding="utf-8") as f:
             data = json.load(f)
+        if data.get("schema_version") != 2:
+            raise ValueError("World graph is outdated; regenerate it with build_world_graph.py")
         self.maps: dict = data["maps"]
         self.name_to_id: dict[str, int] = data["map_name_to_id"]
         self.id_to_name: dict[int, str] = {int(k): v for k, v in data["map_id_to_name"].items()}
@@ -41,7 +43,7 @@ class WorldGraph:
         """Returns list of neighboring map names (via warps or connections)."""
         result = []
         for warp in self.warps(map_name):
-            result.append(warp["dest_map"])
+            result.extend(warp.get("dest_map_candidates", [warp["dest_map"]]))
         for conn in self.connections(map_name).values():
             result.append(conn["map"])
         return result
@@ -65,7 +67,7 @@ class WorldGraph:
                     queue.append(new_path)
         return None
 
-    def terrain_route(self, src, dst, position, terrain):
+    def terrain_route(self, src, dst, position, terrain, last_map=None):
         """BFS over map *regions*, preventing routes through inaccessible entrances."""
         from autonomous_controller.constants import COMPASS_TO_ARROW
 
@@ -82,12 +84,15 @@ class WorldGraph:
             for warp in self.warps(name):
                 if terrain.components(name).get((warp["x"], warp["y"])) != region:
                     continue
-                dest = warp["dest_map"]
                 index = warp["dest_warp_index"] - 1
-                warps = self.warps(dest)
-                if 0 <= index < len(warps):
-                    landing = (warps[index]["x"], warps[index]["y"])
-                    edges.append((dest, terrain.components(dest).get(landing)))
+                destinations = warp.get("dest_map_candidates", [warp["dest_map"]])
+                if not destinations and name == src and last_map:
+                    destinations = [last_map]
+                for dest in destinations:
+                    warps = self.warps(dest)
+                    if 0 <= index < len(warps):
+                        landing = (warps[index]["x"], warps[index]["y"])
+                        edges.append((dest, terrain.components(dest).get(landing)))
             for compass, conn in self.connections(name).items():
                 dest = conn["map"]
                 for border, landing in terrain.connection_tiles(

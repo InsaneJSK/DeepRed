@@ -3,7 +3,7 @@ autonomous_controller/battle_controller.py
 
 BattleController — RAM-driven battle menu navigation for Pokemon Red.
 
-All menu state is read from RAM directly (no dialog scraping).
+State combines RAM fields with text decoded from the RAM tilemap.
 
 RAM addresses (verified against pret/pokered wram.asm + diagnostic):
     0xCC26  wCurrentMenuItem        current cursor in the active menu (0-indexed)
@@ -33,7 +33,9 @@ Usage (from AI agent):
     bc.use_item(bag_index=0)        # use first item in bag
 """
 
-from pyboy.utils import WindowEvent  # pylint: disable=no-name-in-module
+from pyboy.utils import WindowEvent
+
+from autonomous_controller.emulator_session import FrameBudget, FrameLimitReached
 
 # ---------------------------------------------------------------------------
 # RAM addresses (verified against pret/pokered + live diagnostic)
@@ -62,7 +64,7 @@ class BattleController:
     """
     RAM-driven navigation of Pokemon Red battle menus.
 
-    No dialog scraping — every state query reads a specific WRAM address.
+    Main-menu detection uses text decoded from RAM; cursor navigation needs further work.
     """
 
     # Ticks to hold a button press
@@ -102,8 +104,10 @@ class BattleController:
     def _press(self, btn: WindowEvent) -> None:
         """Hold *btn* for PRESS_FRAMES ticks then release and settle."""
         self.pyboy.send_input(btn)
-        self._tick(self.PRESS_FRAMES)
-        self.pyboy.send_input(self._release_map[btn])
+        try:
+            self._tick(self.PRESS_FRAMES)
+        finally:
+            self.pyboy.send_input(self._release_map[btn])
         self._tick(self.SETTLE_FRAMES)
 
     def _press_a(self) -> None:
@@ -157,67 +161,57 @@ class BattleController:
     # ------------------------------------------------------------------
 
     def wait_for_turn(self, timeout: int | None = None) -> bool:
-        """
-        Block until the player's MAIN battle menu is ready.
-
-        Returns True  — main battle menu is visible.
-        Returns False — battle ended (wIsInBattle == 0) OR timed out.
-
-        Callers that need to distinguish the two cases should check
-        is_in_battle() after receiving False.
-
-        While not at the menu, presses B every _TEXT_ADVANCE_EVERY ticks
-        to advance text.  B is safe at all battle states (never selects menus).
-        """
-        limit = timeout if timeout is not None else self.TURN_TIMEOUT
-
-        for tick in range(limit):
-            self._tick()
-
-            # Early exit: battle ended — caller should clear remaining text
-            if not self.is_in_battle():
-                return False
-
-            if self.is_player_turn():
-                self._tick(self.SUBMENU_SETTLE)
+        """Wait for the main menu within a total frame budget, advancing text with B."""
+        budget = FrameBudget(self.pyboy, self.TURN_TIMEOUT if timeout is None else timeout)
+        elapsed = 0
+        try:
+            while budget.remaining:
+                budget.tick()
+                if not self.is_in_battle():
+                    return False
                 if self.is_player_turn():
-                    return True
-
-            else:
-                if tick % _TEXT_ADVANCE_EVERY == 0:
-                    self.pyboy.send_input(WindowEvent.PRESS_BUTTON_B)
-                    self._tick(self.PRESS_FRAMES)
-                    self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_B)
-                    self._tick(self.SETTLE_FRAMES)
-
+                    budget.tick(self.SUBMENU_SETTLE)
+                    if self.is_player_turn():
+                        return True
+                elif elapsed % _TEXT_ADVANCE_EVERY == 0:
+                    budget.press(
+                        WindowEvent.PRESS_BUTTON_B,
+                        WindowEvent.RELEASE_BUTTON_B,
+                        self.PRESS_FRAMES,
+                        self.SETTLE_FRAMES,
+                    )
+                elapsed += 1
+        except FrameLimitReached:
+            pass
         return False
 
-    def clear_post_battle_text(self, timeout: int = 3000) -> None:
-        """
-        Advance any remaining text after a battle ends (XP gain, level-up, etc.).
+    def clear_post_battle_text(self, timeout: int = 3000) -> bool:
+        """Return whether overworld text cleared within the total frame budget."""
+        budget = FrameBudget(self.pyboy, timeout)
+        stable = elapsed = 0
+        try:
+            while budget.remaining:
+                budget.tick()
+                if self.is_in_battle():
+                    return False
+                if self.gs.dialog.strip():
+                    stable = 0
+                    if elapsed % _TEXT_ADVANCE_EVERY == 0:
+                        budget.press(
+                            WindowEvent.PRESS_BUTTON_B,
+                            WindowEvent.RELEASE_BUTTON_B,
+                            self.PRESS_FRAMES,
+                            self.SETTLE_FRAMES,
+                        )
+                else:
+                    stable += 1
+                    if stable >= 30:
+                        return True
+                elapsed += 1
+        except FrameLimitReached:
+            pass
+        return False
 
-        Presses B until the dialog buffer has been empty for 30 consecutive
-        ticks (overworld fully resumed) or the timeout is reached.
-        """
-        stable = 0
-        STABLE_NEEDED = 30
-
-        for tick in range(timeout):
-            self._tick()
-
-            if self.gs.dialog.strip():
-                stable = 0
-                if tick % _TEXT_ADVANCE_EVERY == 0:
-                    self.pyboy.send_input(WindowEvent.PRESS_BUTTON_B)
-                    self._tick(self.PRESS_FRAMES)
-                    self.pyboy.send_input(WindowEvent.RELEASE_BUTTON_B)
-                    self._tick(self.SETTLE_FRAMES)
-            else:
-                stable += 1
-                if stable >= STABLE_NEEDED:
-                    break
-
-    # ------------------------------------------------------------------
     # Main battle menu navigation (2×2 grid)
     # ------------------------------------------------------------------
 

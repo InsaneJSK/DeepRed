@@ -35,6 +35,7 @@ select = ["E4", "E7", "E9", "F", "I"]
 [tool.ruff.lint.per-file-ignores]
 # Standalone diagnostics add the project root before importing its modules.
 "scratch/*.py" = ["E402"]
+"setup-files/*.py" = ["E402"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
