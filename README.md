@@ -79,6 +79,139 @@ on exit. Closing before checkpoint creation cancels the operation.
 
 ## Development
 
+### Agent interface
+
+Try the human-controlled CLI from the project folder:
+
+```powershell
+uv run python demo.py
+# Watch the game and automatically advance mandatory dialogue/animation:
+uv run python demo.py --no-headless --auto-advance
+# Or use another existing checkpoint:
+uv run python demo.py --save saves/oak-room-battle.state
+```
+
+The default is headless with manual advancement. `--no-headless` opens a game
+window at normal speed; `--headless` runs without it at unlimited speed.
+`--auto-advance` automatically executes `advance` only when it is the sole
+available action. It stops at a choice, unsuccessful result, or eight consecutive
+automatic advances. `--no-auto-advance` keeps advancement manual. The game pauses
+while you type, and the visible window continues processing close events.
+It starts from the bedroom save by default, displays current state and
+available actions, and accepts commands such as `navigate REDS_HOUSE_1F`,
+`interact 5`, `fight 0`, `switch 1`, `use_item 2 0`, `advance`, and `resume`.
+Party/bag/move indices are zero-based; object slots use the numbers printed by
+the CLI. Use `help` for syntax, `json` for the complete observation, and
+`quit` or Ctrl+C to exit without saving. Each action uses the same interface
+below; no separate human-only gameplay logic is introduced.
+
+Type `/save` at any CLI prompt to create a timestamped emulator checkpoint in
+`saves/`, or `/save saves/my-checkpoint.state` to choose a filename. Paths with
+spaces can be quoted. Existing files are not overwritten. Saving keeps the demo
+open and prints the path and a command to reload it:
+
+```powershell
+uv run python demo.py --save "saves/my-checkpoint.state" --no-headless --auto-advance
+```
+
+Checkpoints preserve the game, including battles and menus. On a new run, choose
+your window/auto-advance options again and reissue any interrupted travel goal.
+`quit` does not save again or remove checkpoints you already created.
+
+`AgentInterface` exposes JSON-compatible observations and validated actions to a
+future model adapter. It uses an already loaded emulator session and does not
+own its lifetime or call a model:
+
+```python
+from autonomous_controller.agent_interface import AgentInterface
+
+agent = AgentInterface(session, game_state)
+observation = agent.observe()  # does not advance the emulator
+schema = agent.action_schema()  # portable JSON Schema for action requests
+result = agent.execute({"action": "navigate", "destination": "ROUTE_1"})
+```
+
+Choose actions from `observation["actions"]`. `navigate` accepts any known map
+as the final destination, including maps beyond the current map's `exits`.
+For example, `navigate ROUTE_1` from `REDS_HOUSE_2F` handles the stairs, front
+door and Pallet Town automatically. Accessibility is unverified until attempted;
+the observation does not expose the global map graph. Results include `status`,
+`detail`, and an updated `observation`. `submitted` means input was sent, not
+that an attack or escape succeeded. Use `advance` to reach the next decision.
+
+Available request names are `navigate`, `interact`, `resume`, `fight`, `switch`, `use_item`,
+`run`, `cancel`, `advance`, `choose`, and `quantity`. Their arguments are described by `action_schema()`;
+party, move, and bag indices are zero-based. Battle interrupts retain the travel
+destination; after combat and dialogue, `resume` continues that request. A new
+navigation request replaces it. The existing starter-selection fallback remains
+part of navigation. Unsupported decision menus expose no available action.
+
+### Local Ollama runner
+
+Start Ollama with a locally installed model, then run:
+
+```powershell
+uv run python ai_demo.py --model qwen3:4b --goal "Reach ROUTE_1" --stop-at ROUTE_1 --max-calls 30 --no-headless
+# Start from a manual checkpoint:
+uv run python ai_demo.py --model qwen3:4b --save saves/after-healing.state --goal "Visit VIRIDIAN_MART and buy 3 Poke Balls" --max-calls 20
+```
+
+`--url` defaults to `http://localhost:11434`; `--model` defaults to `qwen3:4b`.
+Headless is the default. `--think` enables reasoning on supported models; it is
+off by default. The runner uses Ollama's native `/api/chat` with structured JSON
+and validates every gameplay action through the same interface as the CLI.
+
+Each real choice gets one model call: destinations, interactions, menus and
+battle turns. Mandatory text/animations advance automatically. After a battle,
+the pending route resumes automatically unless `--no-auto-resume` is set.
+A blocked automatic resume returns control to the model; it is not retried in
+a controller loop. Story events and the existing automatic starter selection
+remain controller behavior. The model never receives screenshots or the global
+route graph, and never needs to supply an intermediate route.
+
+Each run writes `events.jsonl`, `summary.json`, and checkpoints under the ignored
+`status/llm-runs/<timestamp>/` directory. The summary counts HTTP attempts
+(including failed calls and the final model `finish` decision), calls by decision
+type, automatic actions, model latency and backend-reported token usage.
+Missing token usage is tracked via `responses_with_usage`; totals cover only
+responses that supplied counts. These measurements are not a cloud cost quote.
+Only the last six action outcomes accompany the current observation, bounding
+history growth. Complete prompts, responses and action results remain in the log.
+
+The run stops at `--max-calls` (default 30), `--max-actions` (default 200), repeated
+failures, three consecutive model actions with unchanged observations, unsupported
+menus, or when the model says `finish`. For destination-only goals, `--stop-at MAP`
+stops on observed arrival outside battle/dialogue, avoiding a completion call. Model completion
+is a claim to inspect in the log, not an independently verified success.
+Ctrl+C or closing the game window also stops execution. Checkpoints are saved
+every ten executed actions and on exit; open them with either demo's `--save`.
+On an interrupted run, the summary is in the final event in `events.jsonl`.
+
+`interact SLOT` approaches a current-map sprite, faces it, and starts dialogue.
+It leaves the first text page visible; use `advance` to continue. Object slots
+are local to each map, and sprites can be people, items, or other objects. An
+off-screen/hidden entry is only confirmed as a target after approaching it.
+For example, after returning to Oak's lab with the parcel, `interact 5` talks to
+Oak and `advance` handles the delivery. Interaction supports adjacent targets and
+talking across tiles identified by the game as counters. Objects show readable
+sprite roles/names while retaining their map-local slot for `interact`.
+
+Overworld menus expose named options with zero-based indices. Use `choose 0`
+for the first displayed option, or `quantity 3` at a shop's quantity prompt.
+`advance` (including auto-advance) stops at these choices. For example, after
+delivering the parcel, talk to the Mart clerk, choose Buy, choose Poke Ball,
+set the quantity, then choose Yes to confirm payment. Use `advance` whenever
+it is the only available action, or enable `--auto-advance`.
+
+At a Pokemon Center, interact with the nurse, advance to HEAL/CANCEL, and
+choose Heal. In Viridian City, the old man's optional catching tutorial is
+available after parcel delivery: talk to him and answer No to "Are you in a
+hurry?" The scripted demonstration advances without offering player fight actions.
+
+Window closure propagates `EmulatorClosed` to the session owner. Keep the usual
+`finally: emulator.stop(save=False)` cleanup. The existing `main.py` demo still
+uses its fixed policy; the interface does not introduce a model dependency.
+
 The default `dev` group includes Ruff and pytest. Ruff checks basic Python errors
 and import ordering, and formats Python code with a 100-character target width.
 Configuration lives in `pyproject.toml`; external repositories, local game assets,

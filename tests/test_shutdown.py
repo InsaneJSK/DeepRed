@@ -1,4 +1,4 @@
-"""Window-close cancellation must escape nested loops and release the emulator."""
+"""Emulator lifetime, cancellation and save protection."""
 
 import contextlib
 import io
@@ -12,8 +12,9 @@ from pyboy.utils import WindowEvent
 
 import main
 from autonomous_controller.battle_controller import BattleController
-from autonomous_controller.emulator_session import EmulatorClosed, EmulatorSession
+from autonomous_controller.emulator_session import EmulatorClosed, EmulatorSession, open_emulator
 from autonomous_controller.nav_core import NavCore
+from autonomous_controller.save_state import create_checkpoint
 
 
 @pytest.fixture(autouse=True)
@@ -22,65 +23,64 @@ def isolate_lifecycle_from_rom_validation(monkeypatch):
 
 
 class ShutdownTests(unittest.TestCase):
-    def test_session_forwards_access_and_tick_arguments(self):
-        emulator = Mock()
-        emulator.tick.return_value = True
-        session = EmulatorSession(emulator)
-        self.assertIs(session.memory, emulator.memory)
-        self.assertTrue(session.tick(20, render=False))
-        emulator.tick.assert_called_once_with(20, render=False)
+    def test_session_input_and_cancellation(self):
+        with self.subTest(scenario="session_forwards_access_and_tick_arguments"):
+            emulator = Mock()
+            emulator.tick.return_value = True
+            session = EmulatorSession(emulator)
+            self.assertIs(session.memory, emulator.memory)
+            self.assertTrue(session.tick(20, render=False))
+            emulator.tick.assert_called_once_with(20, render=False)
+        with self.subTest(scenario="quit_interrupts_movement_and_releases_button"):
+            emulator = Mock()
+            emulator.tick.return_value = False
+            core = NavCore()
+            core.pyboy = EmulatorSession(emulator)
+            core._release_map = {WindowEvent.PRESS_BUTTON_A: WindowEvent.RELEASE_BUTTON_A}
+            with self.assertRaises(EmulatorClosed):
+                core.press(WindowEvent.PRESS_BUTTON_A)
+            emulator.send_input.assert_called_with(WindowEvent.RELEASE_BUTTON_A)
+            self.assertEqual(emulator.tick.call_count, 1)
+        with self.subTest(scenario="quit_interrupts_battle_wait_without_running_timeout"):
+            emulator = Mock()
+            emulator.tick.return_value = False
+            battle = BattleController(EmulatorSession(emulator), Mock())
+            with self.assertRaises(EmulatorClosed):
+                battle.wait_for_turn(timeout=6000)
+            self.assertEqual(emulator.tick.call_count, 1)
 
-    def test_quit_interrupts_movement_and_releases_button(self):
-        emulator = Mock()
-        emulator.tick.return_value = False
-        core = NavCore()
-        core.pyboy = EmulatorSession(emulator)
-        core._release_map = {WindowEvent.PRESS_BUTTON_A: WindowEvent.RELEASE_BUTTON_A}
-        with self.assertRaises(EmulatorClosed):
-            core.press(WindowEvent.PRESS_BUTTON_A)
-        emulator.send_input.assert_called_with(WindowEvent.RELEASE_BUTTON_A)
-        self.assertEqual(emulator.tick.call_count, 1)
-
-    def test_quit_interrupts_battle_wait_without_running_timeout(self):
-        emulator = Mock()
-        emulator.tick.return_value = False
-        battle = BattleController(EmulatorSession(emulator), Mock())
-        with self.assertRaises(EmulatorClosed):
-            battle.wait_for_turn(timeout=6000)
-        self.assertEqual(emulator.tick.call_count, 1)
-
-    def test_main_cleans_up_on_window_close_ctrl_c_and_errors(self):
-        for error in (EmulatorClosed(), KeyboardInterrupt(), RuntimeError("failure")):
-            with self.subTest(error=type(error).__name__):
-                emulator = Mock()
-                with (
-                    patch.object(main, "PyBoy", return_value=emulator),
-                    patch.object(main, "_run_agent", side_effect=error),
-                    contextlib.redirect_stdout(io.StringIO()),
-                ):
-                    if isinstance(error, RuntimeError):
-                        with self.assertRaises(RuntimeError):
+    def test_main_lifecycle(self):
+        with self.subTest(scenario="main_cleans_up_on_window_close_ctrl_c_and_errors"):
+            for error in (EmulatorClosed(), KeyboardInterrupt(), RuntimeError("failure")):
+                with self.subTest(error=type(error).__name__):
+                    emulator = Mock()
+                    with (
+                        patch.object(main, "PyBoy", return_value=emulator),
+                        patch.object(main, "_run_agent", side_effect=error),
+                        contextlib.redirect_stdout(io.StringIO()),
+                    ):
+                        if isinstance(error, RuntimeError):
+                            with self.assertRaises(RuntimeError):
+                                main.main()
+                        else:
                             main.main()
-                    else:
-                        main.main()
-                emulator.stop.assert_called_once_with(save=False)
-
-    def test_idle_window_close_returns_from_main(self):
-        emulator = Mock()
-        emulator.tick.side_effect = [True, True, False]
-        with (
-            patch.object(main, "PyBoy", return_value=emulator),
-            patch("builtins.open", unittest.mock.mock_open(read_data=b"")),
-            patch.object(main, "PokemonGameState"),
-            patch.object(main, "AutonomousController") as controller,
-            patch.object(main, "BattleController") as battle,
-            contextlib.redirect_stdout(io.StringIO()),
-        ):
-            controller.return_value.go_to.return_value = True
-            battle.return_value.is_in_battle.return_value = False
-            main.main()
-        self.assertEqual(emulator.tick.call_count, 3)
-        emulator.stop.assert_called_once_with(save=False)
+                    emulator.stop.assert_called_once_with(save=False)
+        with self.subTest(scenario="idle_window_close_returns_from_main"):
+            emulator = Mock()
+            emulator.tick.side_effect = [True, True, False]
+            with (
+                patch.object(main, "PyBoy", return_value=emulator),
+                patch("builtins.open", unittest.mock.mock_open(read_data=b"")),
+                patch.object(main, "PokemonGameState"),
+                patch.object(main, "AutonomousController") as controller,
+                patch.object(main, "BattleController") as battle,
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                controller.return_value.go_to.return_value = True
+                battle.return_value.is_in_battle.return_value = False
+                main.main()
+            self.assertEqual(emulator.tick.call_count, 3)
+            emulator.stop.assert_called_once_with(save=False)
 
     @pytest.mark.integration
     def test_real_pyboy_quit_event(self):
@@ -99,5 +99,29 @@ class ShutdownTests(unittest.TestCase):
             emulator.stop(save=False)
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_manual_utility_cleanup_and_save_protection(tmp_path, subtests):
+    with subtests.test(scenario="checkpoint_refuses_existing_output_before_starting_emulator"):
+        source = tmp_path / "original.state"
+        source.write_bytes(b"original")
+        other = tmp_path / "other.state"
+        other.write_bytes(b"other")
+        with patch("autonomous_controller.save_state.open_emulator") as launch:
+            for destination in (source, other):
+                with pytest.raises(ValueError, match="overwritten"):
+                    create_checkpoint("unused.gb", source, destination)
+            launch.assert_not_called()
+        assert source.read_bytes() == b"original"
+        assert other.read_bytes() == b"other"
+
+    with subtests.test(scenario="utility_close_and_error_always_stop_without_saving"):
+        for error in (EmulatorClosed(), RuntimeError("failure")):
+            emulator = Mock()
+            with patch("autonomous_controller.emulator_session.PyBoy", return_value=emulator):
+                if isinstance(error, EmulatorClosed):
+                    with open_emulator("unused.gb"):
+                        raise error
+                else:
+                    with pytest.raises(RuntimeError):
+                        with open_emulator("unused.gb"):
+                            raise error
+            emulator.stop.assert_called_once_with(save=False)

@@ -50,12 +50,21 @@ def _run_battle_loop(bc: BattleController, gs: PokemonGameState) -> None:
             else:
                 print("[BATTLE] Timed out waiting for menu — aborting.")
             break
+        if bc.needs_switch():
+            reserves = bc.available_switches()
+            if not reserves or not bc.switch(reserves[0]):
+                print("[BATTLE] Could not send out a healthy replacement.")
+                break
+            continue
         if bc.is_wild_battle():
             print(f"[BATTLE] Turn {turn} — attempting escape")
-            bc.run()
+            accepted = bc.run()
         else:
             print(f"[BATTLE] Turn {turn} — fight(move_index=0)")
-            bc.fight(move_index=0)
+            accepted = bc.fight(move_index=0)
+        if not accepted:
+            print("[BATTLE] Action did not reach the expected menu; stopping.")
+            break
 
     if bc.is_in_battle():
         print("[BATTLE] Handler stopped before the battle finished.")

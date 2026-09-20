@@ -49,9 +49,15 @@ class InterruptHandler:
                 if self._is_in_battle():
                     raise BattleInterrupt("Battle during wait_for_control")
                 if self._is_dialog_active():
+                    button = self.dialogue_button()
+                    release = (
+                        WindowEvent.RELEASE_BUTTON_B
+                        if button == WindowEvent.PRESS_BUTTON_B
+                        else WindowEvent.RELEASE_BUTTON_A
+                    )
                     budget.press(
-                        WindowEvent.PRESS_BUTTON_A,
-                        WindowEvent.RELEASE_BUTTON_A,
+                        button,
+                        release,
                         self.PRESS_FRAMES,
                         self.SETTLE_FRAMES,
                     )
@@ -76,3 +82,12 @@ class InterruptHandler:
         if not self.wait_for_control():
             raise ControlTimeout("Timed out waiting for dialogue/scripted movement to finish")
         self.was_displaced = self._current_pos() != before
+
+    def dialogue_button(self):
+        """Decline the nickname question; advance ordinary dialogue with A."""
+        text = " ".join(self.gs.dialog.upper().split())
+
+        if "GIVE A NICKNAME TO" in text and "?" in text and "YES" in text and "NO" in text:
+            return WindowEvent.PRESS_BUTTON_B
+
+        return WindowEvent.PRESS_BUTTON_A

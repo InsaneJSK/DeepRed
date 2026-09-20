@@ -38,6 +38,7 @@ Usage
 
 from pyboy.utils import WindowEvent
 
+from autonomous_controller.constants import DIRECTIONS
 from autonomous_controller.hop_executor import HopExecutor
 from autonomous_controller.interrupt_handler import (
     BattleInterrupt,
@@ -103,6 +104,105 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):
         }
 
     # Navigation API
+
+    def interact(self, object_slot: int) -> bool:
+        """Approach a current-map sprite, face it, and start dialogue with A.
+
+        Slots are map-local RAM identifiers, not NPC names. Recheck moving
+        targets before confirming; never walk through a warp to approach one.
+        Leave dialogue visible for the caller to read and advance explicitly.
+        """
+        if type(object_slot) is not int or not 1 <= object_slot <= 15:
+            raise ValueError("Object slot must be between 1 and 15")
+        self.last_error = ""
+        if self.gs.map["in_battle"]:
+            raise BattleInterrupt("Battle active before interaction")
+        if self.gs.dialog.strip():
+            self.last_error = "Advance the current dialogue before starting an interaction"
+            return False
+        origin = self._map_id()
+
+        def target():
+            return next((obj for obj in self.gs.map_objects if obj["slot"] == object_slot), None)
+
+        initial = target()
+        if initial is None:
+            raise ValueError(f"No current-map object in slot {object_slot}")
+        for _ in range(3):
+            obj = target()
+            if (
+                self._map_id() != origin
+                or obj is None
+                or obj["picture_id"] != initial["picture_id"]
+            ):
+                self.last_error = "Map or target changed during interaction"
+                return False
+            forbidden = self._warp_tiles() | {(obj["x"], obj["y"])}
+            candidates = []
+            for direction, (dx, dy, _, _) in DIRECTIONS.items():
+                for distance in (1, 2):
+                    if distance == 2:
+                        middle = (obj["x"] - dx, obj["y"] - dy)
+                        counters = {self.gs.mem.read_byte(a) for a in range(0xD532, 0xD535)} - {255}
+                        if self.rom_pass.tile(self._map_name(), *middle) not in counters:
+                            continue
+                    position = (obj["x"] - distance * dx, obj["y"] - distance * dy)
+                    if position in forbidden:
+                        continue
+                    path = self._plan_path(position, forbidden)
+                    if path is not None:
+                        candidates.append((len(path), direction, position))
+            if not candidates:
+                self.last_error = "No reachable square beside the target"
+                return False
+            _, direction, position = min(candidates)
+            if not self.navigate_to_tile(*position, max_steps=100, forbidden_tiles=forbidden):
+                self.last_error = f"Could not approach target: {self.last_nav_reason}"
+                return False
+            current = target()
+            if self._map_id() != origin:
+                self.last_error = "Map changed during interaction"
+                return False
+            if current is None or not current["visible"]:
+                self.last_error = "Target is no longer visible"
+                return False
+            if current["moving"] or (current["x"], current["y"]) != (obj["x"], obj["y"]):
+                self.pyboy.tick(20)
+                self.interrupt.check_and_handle()
+                continue
+            self.press(DIRECTIONS[direction][2])
+            self.pyboy.tick(self.WALK_ANIMATION_FRAMES)
+            current = target()
+            if (
+                self._map_id() != origin
+                or self._pos() != position
+                or current is None
+                or not current["visible"]
+                or current["moving"]
+                or current["picture_id"] != initial["picture_id"]
+                or (current["x"], current["y"]) != (obj["x"], obj["y"])
+                or self.gs.map["player_facing"] != direction.upper()
+            ):
+                continue
+            self.press(WindowEvent.PRESS_BUTTON_A)
+            previous, stable = "", 0
+            for _ in range(300):
+                self.pyboy.tick()
+                if self.gs.map["in_battle"]:
+                    raise BattleInterrupt("Battle started by interaction")
+                text = self.gs.dialog.strip()
+                stable = stable + 1 if text and text == previous else 0
+                previous = text
+                if stable >= 20:
+                    return True
+                if self._map_id() != origin:
+                    break
+            if self._map_id() == origin and self.gs.dialog.strip():
+                return True
+            self.last_error = "Target did not open dialogue"
+            return False
+        self.last_error = "Target kept moving; interaction was not confirmed"
+        return False
 
     def go_to(self, destination: str, _starter_done: bool = False) -> bool:
         """
@@ -208,10 +308,6 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):
     def pick_starter(self, pokemon: str) -> bool:
         """
         Acquire a starter Pokemon from Oak's lab.
-
-        Must be called AFTER Oak's final pre-pick dialogue has fully ended
-        and the lab is in a stable, non-interrupted state.
-
         Parameters
         ----------
         pokemon : "bulbasaur" | "charmander" | "squirtle"
@@ -239,13 +335,6 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):
             )
 
         print(f"[STARTER] Picking {pokemon.title()}…")
-
-        # Wait for Oak's entire multi-phase cutscene to complete.
-        # The routine spams A through every dialogue box and waits for the
-        # position to stabilise and CONTROL_GRACE consecutive dialog-free
-        # frames before proceeding — covering the full sequence of:
-        #   Oak triggers → player dragged to lab → Oak walks to table →
-        #   "Choose your Pokemon!" → player regains control at bag screen.
         print("[STARTER] Waiting for Oak's sequence to finish before moving…")
         if not self.interrupt.wait_for_control():
             raise ControlTimeout("Timed out waiting for control before starter selection")
@@ -276,7 +365,7 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):
                 if not self.interrupt.wait_for_control():
                     raise ControlTimeout("Timed out waiting for dialogue after starter selection")
                 return True
-            self.press(WindowEvent.PRESS_BUTTON_A)
+            self.press(self.interrupt.dialogue_button())
 
         print(f"[STARTER] Timed out — {pokemon} not in party after 300 A presses.")
         return False
