@@ -1,5 +1,7 @@
 # Pokemon Red navigation data
 
+[Project overview](../README.md) · [Navigation design](../NAVIGATION.md) · [Usage and testing](../docs/USAGE.md)
+
 `pokemon_red.json` is the checked-in runtime bundle. It contains map tile IDs,
 dimensions, walkability rules, tile-pair restrictions, warps, connections, and map
 IDs. It contains no ROM image or player saves. Changing game state still comes

@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 from queue import Empty, Queue
@@ -17,7 +18,7 @@ from autonomous_controller.presentation import DecisionWindow, PresentedSession
 from demo import ROOT, save_checkpoint
 from memory_state.game_state import PokemonGameState
 
-import time
+
 def paused_request(session, perform):
     """HTTP runs in a daemon worker; SDL and emulation stay on the main thread."""
     results = Queue()
@@ -98,7 +99,6 @@ def build_parser():
 
 
 def main(argv=None):
-    never_before = False
     parser = build_parser()
     args = parser.parse_args(argv)
     validate_rom(args.rom)
@@ -129,9 +129,6 @@ def main(argv=None):
                 if not args.headless and args.overlay:
                     window = DecisionWindow(session, PLAY_INSTRUCTION, args.model, args.max_calls)
                     session = PresentedSession(session, window)
-                    if not never_before:
-                        time.sleep(10)
-                        never_before = True
                 agent = AgentInterface(session, PokemonGameState(session))
                 if args.stop_at and agent.navigation.graph.map_id(args.stop_at) is None:
                     parser.error(f"Unknown --stop-at map: {args.stop_at}")

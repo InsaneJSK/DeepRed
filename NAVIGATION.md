@@ -1,99 +1,55 @@
-# Navigation rewrite — 8 September 2026
+# Navigation and controller design
 
-These are historical implementation notes. Current setup uses the checked-in
-navigation bundle, not a runtime pokered checkout or world_graph.json. See
-[README.md](README.md) and [game_data/README.md](game_data/README.md) for current usage.
+[Overview and demo](README.md) · [Usage guide](docs/USAGE.md) · [Data provenance](game_data/README.md)
 
-Navigation now reaches Route 1 and Viridian City through real overworld
-connections. The original room save was exercised through Oak's sequence,
-starter selection, the rival battle, wild encounters, and both north crossings.
+DeepRed separates choosing a destination from executing the trip. The model can request `navigate VIRIDIAN_CITY` from Red's bedroom; it does not need to choose each door, intermediate map or button press. The recorded demo verifies an early-game journey through starter selection, the rival battle and wild encounters. It does not establish general late-game routing.
 
-## Major changes
+## Two sources of knowledge
 
-- Replaced viewport-based guesses and repeated dodging with a full-map walking
-  grid decoded from the matching pokered `.blk`, `.bst`, and collision lists.
-  Public terrain coordinates now use 16-pixel player steps consistently.
-- A* uses real map bounds, directional tile-pair restrictions, parent pointers,
-  and an actual node-expansion limit. Blocked goals fail explicitly; they are
-  not silently replaced by neighboring squares.
-- Live sprite records are available as `PokemonGameState.map_objects` and in
-  `to_dict()`. Navigation avoids visible objects and reserves both squares during
-  an NPC's walking animation. Off-screen records are not assumed to be continuously
-  simulated occupancy. Terrain is available for the whole map independently.
-- Failed moves exclude the attempted edge for replanning. Dynamic blockers get
-  a bounded wait. The old straight-line goal cache and blind dodge/escape loops
-  are no longer used. Existing `path_cache.json` is left untouched.
-- Connections examine both maps' shared walking squares, including odd
-  coordinates and the signed connection offset. They choose a reachable border,
-  take a full step across it, and verify the actual destination map.
-- Warp execution avoids unrelated warp squares, tries reachable approaches, and
-  handles doors that activate when stepping out of the doorway. Movement stops
-  immediately when a map change or scripted displacement invalidates the plan.
-- World routing distinguishes separate walking regions within a map. From the
-  south of Route 2 it selects the southern forest gate, not the inaccessible
-  northern entrance merely because it shares the Route 2 map ID.
-- Dialogue gets a longer settling window. `BattleInterrupt` now propagates to
-  the caller, including battles at the destination. The example travel loop flees
-  wild encounters, fights trainers, and resumes navigation. An unchanged route
-  failure stops the loop rather than retrying it repeatedly.
-- Fixed party nickname reads that incorrectly requested roughly 54,000 bytes
-  per Pokémon instead of the 11-byte name field.
+**Static terrain:** [game_data/pokemon_red.json](game_data/pokemon_red.json) contains map IDs, dimensions, tile geometry, collision rules, directional tile-pair restrictions, warps and overworld connections. A pinned source revision, supported ROM checksum and payload digest identify the bundle. Runtime validates its structure and integrity.
 
-High-level calls remain `go_to(MAP_NAME)`, `navigate_to_tile(x, y)`, and
-`pick_starter(name)`. `go_to` returns a bool for arrival/failure and raises
-`BattleInterrupt` for combat. `last_error` explains a failed hop;
-`nav_stats` counts movement calls and blocked steps. Terrain helper internals
-changed substantially; old block-coordinate helpers are no longer supported.
+**Live state:** [memory_state/game_state.py](memory_state/game_state.py) reads player coordinates, facing, map identity, dialogue and current-map object records from emulator RAM. Visible NPC occupancy is refreshed during navigation, including occupied/reserved squares while sprites move.
 
-## Verified results
+Full-map terrain solves the original viewport limitation for static walls and paths. It does not supply live offscreen NPC positions or all story-driven terrain changes. Offscreen records are not treated as continuously simulated occupancy.
 
-All checks used Python 3.11.9, PyBoy 2.7.0, the existing ROM, and real button
-inputs. No position, party, story-flag, or battle-memory writes were used.
-Original saves and cartridge RAM were not saved over. Checkpoints are confined
-to ignored `scratch/*.state` files.
+## Planning and execution
 
-| Check | Result |
-|---|---|
-| Original bedroom → Route 1 → Viridian City | Passed; 128 movement calls, 11 blocked attempts including scripted sequences, 18,089 emulated frames in the recorded run |
-| Route 1 checkpoint → Viridian City | Passed; 55 movement calls, zero blocked steps, three escaped wild encounters |
-| Viridian → Route 22 → Viridian → Pallet | Passed; 134 movement calls, zero blocked steps; verifies west/east/south crossings and offsets |
-| Viridian → forest with the current story state | Stopped at the old-man gate after 28 movement calls and zero blocked steps; reported scripted displacement |
-| Automated regression suite | 12 tests passed: dimensions, floor/furniture, bounds, detours, reverse connection offsets, forest entrance selection, empty/blocked paths, search budget, forbidden tiles, live object occupancy, and bounded waits |
+1. [WorldGraph.terrain_route](autonomous_controller/world_graph.py) searches over connected walking regions, not only map IDs. A gate on another inaccessible part of the same map is not automatically reachable.
+2. [NavAstar](autonomous_controller/nav_astar.py) and [pathfinder.py](autonomous_controller/pathfinder.py) plan within map bounds using walkability, directional restrictions, visible occupancy and bounded search.
+3. [HopExecutor](autonomous_controller/hop_executor.py) executes map transitions. Doors and boundary connections are distinct: overworld connections use shared border squares and offsets, then verify the destination map.
+4. [AutonomousController](autonomous_controller/controller.py) coordinates the route. It checks actual movement, replans around failed edges, waits within limits for blockers, and reports unexpected transitions or script displacement.
 
-The run counts describe specific save states, not timing guarantees. Encounters
-and NPC movements can change with input timing. `scratch/navigation_final.log`,
-`navigation_city.log`, `navigation_return.log`, and `navigation_gate.log` contain
-the recorded emulator output; logs are ignored by Git.
+Warp approaches avoid unrelated warp squares. A map change or scripted displacement invalidates the current local plan. Story gates are not assumed passable just because the maps are connected.
 
-## Run and verify
+## Interruptions and action results
 
-Run from the repository root with uv (see README.md for setup):
+Travel may raise a battle or starter-choice interruption. [AgentInterface](autonomous_controller/agent_interface.py) converts this into a structured result, exposes the next available decisions, and keeps a pending destination. The model chooses the starter and supported battle/menu actions; the runner can resume navigation once those decisions are resolved.
 
-```powershell
-uv sync --locked
-uv run python -X utf8 main.py
-uv run python -X utf8 -m unittest discover -s tests -v
-uv run python -X utf8 scratch/navigation_regression.py
-```
+The human CLI and LLM runner share that interface. `observe()` reads state without advancing emulation; `execute()` validates arguments and availability, invokes a controller, and returns a fresh observation.
 
-`main.py` still defaults to `ROUTE_1`; set `GOAL = "VIRIDIAN_CITY"` to demonstrate
-both north crossings. The headless regression script defaults to both goals.
-Use `--checkpoint` to keep intermediate test states in scratch. The tests require
-the local pokered checkout and generated `world_graph.json`.
+| Result | Meaning |
+| --- | --- |
+| `completed` | The requested controller operation completed |
+| `submitted` | Inputs were sent; a later observation must establish the outcome |
+| `interrupted` | Another decision, such as battle or starter selection, needs handling |
+| `blocked`, `timeout`, `failed` | Execution could not complete; inspect the detail |
+| `rejected` | The request was not accepted; the runner can also reject repeated travel before execution |
 
-## Remaining scope
+For example, selecting RUN is not proof of escape. The game must leave battle, and successful escape regression tests also check the game message and unchanged move PP.
 
-- The current story state requires completing Oak's parcel/Pokédex sequence
-  before the northern Viridian route opens. Navigation respects that gate; it
-  does not automate the quest. End-to-end forest travel is not claimed.
-- This is a walking planner. It does not plan Surf, Cut, Strength, ledge jumps,
-  warp-pad puzzles, or every later-game script. Avoiding jumps can produce a
-  longer but walkable return route.
-- Full-map terrain comes from the matching disassembly, not a live snapshot of
-  every event-modified block. Dynamic terrain changes need additional support.
-- The existing world-graph builder still guesses some ambiguous LAST_MAP exits.
-  Runtime transitions are checked, but arbitrary late-game graph routing is not
-  validated. Future work should preserve/resolve these exits using live context.
-- Visible NPC occupancy is refreshed on each planning step; it cannot promise
-  an NPC will not move into the next square. Such failures trigger bounded
-  replanning rather than permanent terrain changes.
+## Bounds at different levels
+
+- Movement and dialogue controllers use finite search/frame budgets and release pressed buttons on interruption.
+- Action validation rejects malformed requests and unsupported choices.
+- The LLM runner limits requests and total action attempts, retains a compact memory, and rejects repeated directed trips without new observations.
+- Optional auto-flee allows at most two controller-selected escape attempts per observed wild encounter; it is off by default and labelled separately from model decisions.
+
+These bounds prevent a model or controller from retrying indefinitely. They do not prove that every accepted action advances the story.
+
+## Verification and limitations
+
+Grouped tests cover terrain bounds, path search, dynamic blocking, region-aware routing, connection offsets, interruptions, menus, action validation and shutdown. Local real-emulator checks exercise early routes and battle effects. Some test fixtures seed RAM to isolate a specific menu branch; ordinary gameplay uses button inputs.
+
+Static terrain and the bundled graph do not provide generalized Surf, Cut, Strength, ledge-jump, warp-puzzle or late-game script planning. Event-driven terrain changes and certain special return destinations remain limited. See the explicitly unsupported map and regeneration constraints in [game_data/README.md](game_data/README.md).
+
+No external pokered checkout or generated `world_graph.json` is required at runtime. [build_world_graph.py](autonomous_controller/build_world_graph.py) remains an offline exporter helper. To reproduce scripted controller journeys, use the command in the [testing guide](docs/USAGE.md#testing); it is distinct from the LLM demo.
