@@ -1,8 +1,10 @@
 """One real-game journey: starter nickname decision and battle move choices."""
 
 import json
-from io import BytesIO
+import os
+from io import BytesIO, StringIO
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from pyboy import PyBoy
@@ -12,9 +14,108 @@ from autonomous_controller import AutonomousController, BattleController, Battle
 from autonomous_controller.agent_interface import AgentInterface
 from autonomous_controller.emulator_session import EmulatorSession
 from autonomous_controller.game_data import validate_rom
+from autonomous_controller.llm_runner import run_agent
 from memory_state.game_state import PokemonGameState
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.integration
+def test_auto_flee_exits_real_wild_encounters(subtests):
+    """Use local, reproducible escape checkpoints; never mutate saved assets."""
+    rom = ROOT / "Pokemon_Red/Red.gb"
+    paths = [
+        Path(p)
+        for p in os.environ.get("DEEPRED_WILD_STATES", str(ROOT / "saves/wild-escape.state")).split(
+            os.pathsep
+        )
+    ]
+    if not rom.is_file() or any(not p.is_file() for p in paths):
+        pytest.skip("Local ROM and wild-escape checkpoint(s) required")
+    validate_rom(rom)
+    emulator = PyBoy(str(rom), window="null", sound_emulated=False)
+    try:
+        emulator.set_emulation_speed(0)
+        for path in paths:
+            with subtests.test(checkpoint=path.name):
+                with path.open("rb") as stream:
+                    emulator.load_state(stream)
+                session = BoundedSession(emulator)
+                agent = AgentInterface(session, PokemonGameState(session))
+                assert agent.observe()["battle"]["kind"] == "wild"
+                for _ in range(8):
+                    if agent.observe()["decision"] == "battle":
+                        break
+                    assert agent.execute({"action": "advance"})["status"] == "completed"
+                before = agent.observe()
+                assert before["decision"] == "battle"
+                client, log = Mock(model="not-called"), StringIO()
+                client.request.side_effect = AssertionError(
+                    "Escape should not require model inference"
+                )
+                stats = run_agent(
+                    agent,
+                    client,
+                    log,
+                    auto_flee=True,
+                    stop_at=before["location"]["map_key"],
+                    max_actions=16,
+                )
+                after = agent.observe()
+                assert stats["stop_reason"] == "destination_reached"
+                assert 1 <= stats["automatic_actions"]["run"] <= 2
+                assert not after["battle"]["active"] and after["decision"] == "overworld"
+                assert after["party"][0]["moves"] == before["party"][0]["moves"]
+                assert after["inventory"] == before["inventory"]
+                assert "Got away safely!" in log.getvalue()
+                client.request.assert_not_called()
+    finally:
+        emulator.stop(save=False)
+
+
+@pytest.mark.integration
+def test_explicit_starter_choices(subtests):
+    rom, save = ROOT / "Pokemon_Red/Red.gb", ROOT / "saves/in-room-start.state"
+    if not rom.exists() or not save.exists():
+        pytest.skip("Local ROM and bedroom checkpoint required")
+    validate_rom(rom)
+    emulator = PyBoy(str(rom), window="null", sound_emulated=False)
+    try:
+        emulator.set_emulation_speed(0)
+        with save.open("rb") as stream:
+            emulator.load_state(stream)
+        session = BoundedSession(emulator)
+        session.tick()
+        state = PokemonGameState(session)
+        agent = AgentInterface(session, state)
+        result = agent.execute({"action": "navigate", "destination": "ROUTE_1"})
+        assert result["status"] == "interrupted"
+        assert result["observation"]["decision"] == "starter"
+        assert not state.party_pokemon
+        assert agent.pending_destination == "ROUTE_1"
+        checkpoint = BytesIO()
+        emulator.save_state(checkpoint)
+        for pokemon in ("bulbasaur", "charmander", "squirtle"):
+            with subtests.test(pokemon=pokemon):
+                emulator.load_state(BytesIO(checkpoint.getvalue()))
+                agent = AgentInterface(session, state)
+                assert agent.observe()["actions"] == ["choose_starter"]
+                assert (
+                    agent.execute({"action": "choose_starter", "pokemon": "pikachu"})["status"]
+                    == "rejected"
+                )
+                # Selection remains correct when the starting position differs.
+                assert agent.navigation.navigate_to_tile(4, 4)
+                result = agent.execute({"action": "choose_starter", "pokemon": pokemon})
+                assert result["status"] == "completed", result
+                assert state.party_pokemon[0]["species_name"].lower() == pokemon
+                assert state.party_pokemon[0]["nickname"].lower() == pokemon
+                assert (
+                    agent.execute({"action": "choose_starter", "pokemon": pokemon})["status"]
+                    == "rejected"
+                )
+    finally:
+        emulator.stop(save=False)
 
 
 class BoundedSession(EmulatorSession):

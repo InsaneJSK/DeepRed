@@ -71,7 +71,7 @@ def test_observation_contract_and_decisions(subtests):
     ]
     assert agent.observe()["party"][0]["hp"] == 3
     assert agent.observe()["party"][0]["moves"][0]["index"] == 0
-    assert len(json.loads(json.dumps(agent.action_schema()))["oneOf"]) == 11
+    assert len(json.loads(json.dumps(agent.action_schema()))["oneOf"]) == 12
     agent.navigation.go_to.assert_not_called()
     agent.battle.wait_for_turn.assert_not_called()
 

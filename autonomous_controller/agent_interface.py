@@ -8,7 +8,7 @@ from copy import deepcopy
 
 from autonomous_controller.battle_controller import BattleController
 from autonomous_controller.controller import AutonomousController
-from autonomous_controller.interrupt_handler import BattleInterrupt
+from autonomous_controller.interrupt_handler import BattleInterrupt, StarterChoiceRequired
 from autonomous_controller.overworld_menu import OverworldMenu
 from memory_state.battle_constants import Move, StatusCondition
 from memory_state.pokemon_constants import Pokemon
@@ -17,6 +17,7 @@ from memory_state.sprite_names import object_name
 _ARGUMENTS = {
     "navigate": ({"destination": str}, {}),
     "interact": ({"object_slot": int}, {}),
+    "choose_starter": ({"pokemon": str}, {}),
     "choose": ({"option_index": int}, {}),
     "quantity": ({"amount": int}, {}),
     "resume": ({}, {}),
@@ -39,7 +40,7 @@ class AgentInterface:
 
     def __init__(self, emulator, game_state, *, navigation=None, battle=None):
         self.gs = game_state
-        self.navigation = navigation or AutonomousController(emulator, game_state)
+        self.navigation = navigation or AutonomousController(emulator, game_state, starter=None)
         self.battle = battle or BattleController(emulator, game_state)
         self.overworld = OverworldMenu(emulator, game_state)
         self.pending_destination = None
@@ -56,9 +57,11 @@ class AgentInterface:
                     properties[key]["minimum"] = 0
             if name == "navigate":
                 properties["destination"]["description"] = (
-                    "Final target map, not the next doorway. For a goal of reaching ROUTE_1, "
-                    "use ROUTE_1 even from REDS_HOUSE_2F; the controller routes across maps."
+                    "Your chosen final target map, not the next doorway; "
+                    "the controller routes across intermediate maps automatically."
                 )
+            if name == "choose_starter":
+                properties["pokemon"]["enum"] = ["bulbasaur", "charmander", "squirtle"]
             variants.append(
                 {
                     "type": "object",
@@ -164,6 +167,15 @@ class AgentInterface:
             )
         if decision == "overworld" and self.pending_destination:
             allowed = [*allowed, "resume"]
+        starter_options = []
+        if (
+            decision == "overworld"
+            and name == "OAKS_LAB"
+            and not self.gs.party_pokemon
+            and self.gs.mem.read_byte(0xD5F0) == 6
+        ):
+            decision, allowed = "starter", ["choose_starter"]
+            starter_options = ["bulbasaur", "charmander", "squirtle"]
         party = []
         for index, member in enumerate(self.gs.party_pokemon):
             hp, maximum = map(int, member["current_hp"].split("/"))
@@ -211,6 +223,7 @@ class AgentInterface:
                 "opponent": self._combatant(0xCFE5) if in_battle else None,
             },
             "menu": service_menu,
+            "starter_options": starter_options,
             "dialogue": self.gs.dialog,
             "decision": decision,
             "actions": allowed,
@@ -260,6 +273,10 @@ class AgentInterface:
                 detail = None if success else self.navigation.last_error
                 if success:
                     self.pending_destination = None
+            elif action == "choose_starter":
+                success = self.navigation.pick_starter(**arguments)
+                status = "completed" if success else "blocked"
+                detail = "Starter selected" if success else "Starter selection did not complete"
             elif action == "interact":
                 success = self.navigation.interact(**arguments)
                 status = "completed" if success else "blocked"
@@ -290,6 +307,8 @@ class AgentInterface:
                     if success
                     else ("timeout" if detail == "timeout" else "blocked")
                 )
+        except StarterChoiceRequired as error:
+            status, detail = "interrupted", str(error)
         except BattleInterrupt:
             status, detail = "interrupted", "Battle started; handle it before continuing"
         except ValueError as error:

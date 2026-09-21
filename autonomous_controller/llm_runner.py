@@ -3,22 +3,52 @@
 import json
 import time
 from collections import Counter, deque
+from contextlib import nullcontext, redirect_stdout
+from io import StringIO
 from urllib.request import Request, urlopen
 
-SYSTEM_PROMPT = """You play Pokemon Red through RAM observations and validated actions.
-Choose ONE action as JSON matching the supplied schema. No prose or markdown.
-Use only currently available actions. Indices are zero-based, except NPC object
-slots, which are provided explicitly. Choose a move on each battle turn.
-navigate takes the FINAL destination (e.g. ROUTE_1, VIRIDIAN_CITY,
-VIRIDIAN_POKECENTER, OAKS_LAB, REDS_HOUSE_2F). The controller handles all walking,
-doors and intermediate maps. You do not choose each doorway. Story gates may
-block travel; consider dialogue and previous outcomes rather than repeating a
-blocked action. Exits describe local surroundings, not a restriction on goals.
-Mandatory dialogue and animations advance automatically. Interrupted travel
-normally resumes after battle. Menu choices, purchases and battles need you.
-Use finish with a brief reason when the user's goal is achieved or you cannot
-proceed. Do not claim success without evidence from the observation.
+from autonomous_controller.agent_memory import AgentMemory
+from autonomous_controller.presentation import decision_text
+
+PLAY_INSTRUCTION = "Reach VIRIDIAN_CITY."
+
+SYSTEM_PROMPT = (
+    PLAY_INSTRUCTION
+    + """
+You control Pokemon Red through RAM observations and validated actions.
+Return exactly ONE JSON action matching action_schema. No prose or markdown.
+Choose only actions listed in observation.actions, or finish as described below.
+
+Prioritize reaching VIRIDIAN_CITY over exploring unrelated buildings.
+When navigate is available and recent outcomes do not show an unresolved blocker,
+request {"action":"navigate","destination":"VIRIDIAN_CITY"} directly.
+The controller handles the full route, including walking, doors and intermediate
+maps. Do not navigate one doorway at a time. Local exits are observations, not a
+list of the only destinations you may request.
+
+If travel is blocked or interrupted, use the current decision, dialogue and
+recent_outcomes to address the obstacle. Choose a starter when starter_options
+are offered. Resolve battles and menus before continuing the journey.
+Mandatory dialogue advances automatically, and interrupted travel normally resumes
+automatically. Use resume when available if the pending destination needs continuing.
+
+Consult exploration_memory before revisiting a location. A completed trip only
+confirms movement, not goal progress. Do not repeat a rejected trip unchanged.
+Instead, choose a relevant interaction or a different destination to address the
+blocker. Return to earlier locations when new observations give a reason to do so.
+
+Use battle.kind to distinguish encounters. In wild battles, always run away.
+Only if escape keeps failing, choose a usable move instead. In trainer
+battles, use fight with a move that has PP. If a switch is
+required, choose a healthy available party member. Respect the current menu and
+available actions rather than assuming every battle action is always possible.
+
+Indices are zero-based except NPC object slots, which are provided explicitly.
+Use finish with a brief reason only when the observed map is VIRIDIAN_CITY and
+the decision is overworld, or when no supported action can resolve a blocker.
+Do not claim arrival just because a navigation request was submitted.
 """
+)
 
 
 class OllamaClient:
@@ -71,15 +101,19 @@ def decision_schema(agent, observation):
 def run_agent(
     agent,
     client,
-    goal,
     log,
     *,
     max_calls=30,
     max_actions=200,
     auto_resume=True,
+    auto_flee=False,
     stop_at=None,
     request=None,
     checkpoint=None,
+    on_decision=None,
+    on_automatic=None,
+    diagnostics=None,
+    verbose=False,
 ):
     """Count attempts, preserve outcomes, and never ask a model to advance text.
 
@@ -98,8 +132,10 @@ def run_agent(
         "stop_reason": None,
     }
     history = deque(maxlen=6)
+    memory = AgentMemory()
     failures = automatic_streak = actions = no_progress = 0
     resume_ready = False
+    flee_attempts = 0
     started = time.monotonic()
 
     def record(event, **data):
@@ -108,16 +144,20 @@ def run_agent(
 
     record(
         "start",
-        goal=goal,
+        instruction=PLAY_INSTRUCTION,
         model=client.model,
         max_calls=max_calls,
         max_actions=max_actions,
         auto_resume=auto_resume,
+        auto_flee=auto_flee,
         stop_at=stop_at,
     )
     try:
         while actions < max_actions:
             observation = agent.observe()
+            if not observation.get("battle", {}).get("active", False):
+                flee_attempts = 0
+            memory.observe(observation)
             if (
                 stop_at
                 and observation["location"]["map_key"] == stop_at
@@ -133,6 +173,15 @@ def run_agent(
             elif auto_resume and resume_ready and "resume" in available:
                 action, automatic = {"action": "resume"}, True
                 resume_ready = False
+            elif (
+                auto_flee
+                and flee_attempts < 2
+                and observation.get("battle", {}).get("active")
+                and observation["battle"].get("kind") == "wild"
+                and observation["decision"] == "battle"
+                and "run" in available
+            ):
+                action, automatic = {"action": "run"}, True
             else:
                 automatic_streak = 0
                 if not available:
@@ -148,10 +197,21 @@ def run_agent(
                         "role": "user",
                         "content": json.dumps(
                             {
-                                "goal": goal,
                                 "observation": observation,
                                 "recent_outcomes": list(history),
+                                "exploration_memory": memory.summary(),
                                 "action_schema": schema,
+                                **(
+                                    {
+                                        "automatic_policy": {
+                                            "auto_flee_attempts_this_encounter": flee_attempts,
+                                            "limit": 2,
+                                            "note": "Automatic escape attempts are bounded. If still in battle after two attempts, choose how to proceed; fighting is allowed.",
+                                        }
+                                    }
+                                    if auto_flee
+                                    else {}
+                                ),
                             }
                         ),
                     },
@@ -159,10 +219,11 @@ def run_agent(
                 stats["llm_calls"] += 1
                 stats["calls_by_decision"][observation["decision"]] += 1
                 record("request", call=stats["llm_calls"], messages=messages, schema=schema)
-                print(
-                    f"LLM call {stats['llm_calls']}/{max_calls}: {observation['decision']}",
-                    flush=True,
-                )
+                if verbose:
+                    print(
+                        f"LLM call {stats['llm_calls']}/{max_calls}: {observation['decision']}",
+                        flush=True,
+                    )
                 call_start = time.monotonic()
                 try:
 
@@ -195,7 +256,12 @@ def run_agent(
                             raise ValueError("finish requires a reason string")
                         stats["stop_reason"] = "model_finished"
                         record("finish", reason=action["reason"], observation=observation)
-                        print("Model stopped:", action["reason"])
+                        print(
+                            f"{stats['llm_calls']:02d}  {decision_text(action, observation)}",
+                            flush=True,
+                        )
+                        if on_decision:
+                            on_decision(action, observation, stats["llm_calls"])
                         break
                 except (ValueError, KeyError, TypeError) as error:
                     failures += 1
@@ -206,25 +272,64 @@ def run_agent(
                         break
                     continue
             if automatic:
-                automatic_streak += 1
-                if automatic_streak > 8:
-                    stats["stop_reason"] = "automatic_action_limit"
+                if automatic_streak >= 8:
+                    stats["stop_reason"] = "automatic_no_progress"
                     break
                 stats["automatic_actions"][action["action"]] += 1
+                if action["action"] == "run":
+                    flee_attempts += 1
+                    print(f"Auto: attempt escape ({flee_attempts}/2)", flush=True)
+                    if on_automatic:
+                        on_automatic(action, observation, stats["llm_calls"])
             else:
                 stats["model_actions"] += 1
-            result = agent.execute(action)
+                print(f"{stats['llm_calls']:02d}  {decision_text(action, observation)}", flush=True)
+                if on_decision:
+                    on_decision(action, observation, stats["llm_calls"])
+            with (
+                nullcontext()
+                if verbose
+                else redirect_stdout(diagnostics if diagnostics is not None else StringIO())
+            ):
+                rejection = memory.rejection(action, observation)
+                result = (
+                    {"status": "rejected", "detail": rejection, "observation": observation}
+                    if rejection
+                    else agent.execute(action)
+                )
             actions += 1
+            if automatic:
+                automatic_streak = (
+                    automatic_streak + 1 if observation == result["observation"] else 0
+                )
             record("action", automatic=automatic, request=action, result=result)
-            print(f"{'Auto' if automatic else 'Model'} {action}: {result['status']}", flush=True)
-            history.append(
-                {
-                    "request": action,
-                    "status": result["status"],
-                    "detail": result["detail"],
-                    "location": result["observation"]["location"],
-                }
-            )
+            if rejection:
+                print(
+                    "Navigation rejected: repeated trip; asking the model to choose again.",
+                    flush=True,
+                )
+            if verbose:
+                print(
+                    f"{'Auto' if automatic else 'Model'} {action}: {result['status']}", flush=True
+                )
+            memory.record(action, observation, result)
+            if not result["observation"].get("battle", {}).get("active", False):
+                flee_attempts = 0
+            if (
+                not automatic
+                or action["action"] == "run"
+                or result["status"] in ("rejected", "blocked", "timeout", "failed")
+            ):
+                history.append(
+                    {
+                        "request": action,
+                        "automatic": automatic,
+                        "status": result["status"],
+                        "detail": result["detail"],
+                        "from_map": observation["location"].get("map_key"),
+                        "location": result["observation"]["location"],
+                    }
+                )
             if action["action"] in ("navigate", "resume"):
                 resume_ready = result["status"] == "interrupted"
             failures = (
@@ -252,5 +357,11 @@ def run_agent(
         stats["stop_reason"] = stats["stop_reason"] or "interrupted_or_error"
         stats["elapsed_seconds"] = time.monotonic() - started
         record("summary", **stats)
-        print("Run summary:", json.dumps(stats), flush=True)
+        if verbose:
+            print("Run summary:", json.dumps(stats), flush=True)
+        else:
+            print(
+                f"Stopped: {stats['stop_reason'].replace('_', ' ')} ({stats['llm_calls']} calls).",
+                flush=True,
+            )
     return stats

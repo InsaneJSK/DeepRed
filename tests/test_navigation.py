@@ -19,9 +19,9 @@ from autonomous_controller.interrupt_handler import BattleInterrupt
 from autonomous_controller.nav_astar import NavAstar
 from autonomous_controller.nav_core import NavCore
 from autonomous_controller.pathfinder import astar
+from autonomous_controller.scripted_demo import _run_battle_loop
 from autonomous_controller.walkable_map import RomPassability
 from autonomous_controller.world_graph import WorldGraph
-from main import _run_battle_loop
 from memory_state.game_state import PokemonGameState
 from scratch.navigation_regression import verify_expected_block
 

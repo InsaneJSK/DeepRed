@@ -9,6 +9,10 @@ class BattleInterrupt(Exception):
     """A battle started; the caller must handle combat and resume."""
 
 
+class StarterChoiceRequired(Exception):
+    """Navigation reached Oak's starter decision; the caller must choose."""
+
+
 class ControlTimeout(TimeoutError):
     """Dialogue or scripted movement did not release control in time."""
 

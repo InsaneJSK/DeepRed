@@ -19,8 +19,8 @@ the caller decides the next action. BattleInterrupt propagates to the caller.
 
 Starter picking
 ---------------
-pick_starter(name) executes the hardcoded button sequence to acquire a
-starter Pokemon from Oak's lab.  It must only be called after Oak's
+pick_starter(name) navigates to the selected ball and confirms the choice in
+Oak's lab. It must only be called after Oak's
 dialogue has fully ended and the lab is in a stable state.
 
 Usage
@@ -44,21 +44,15 @@ from autonomous_controller.interrupt_handler import (
     BattleInterrupt,
     ControlTimeout,
     InterruptHandler,
+    StarterChoiceRequired,
 )
 from autonomous_controller.nav_astar import NavAstar
 from autonomous_controller.nav_core import NavCore
 from autonomous_controller.walkable_map import RomPassability
 from autonomous_controller.world_graph import WorldGraph
 
-# Starter-picking constants
-# Steps to reach and face each starter's pokeball from the position where
-# Oak's final pre-pick dialogue ends.
-# 'face_up' = press UP to change facing without moving (table blocks movement)
-_STARTER_STEPS: dict[str, list[str]] = {
-    "bulbasaur": ["down", "right", "right", "right", "face_up"],
-    "charmander": ["down", "right", "face_up"],
-    "squirtle": ["down", "right", "right", "face_up"],
-}
+# Walkable squares below the three starter balls in Oak's lab.
+_STARTER_POSITIONS = {"bulbasaur": (8, 4), "charmander": (6, 4), "squirtle": (7, 4)}
 
 # Species name as it appears in PokemonGameState.party_pokemon
 _STARTER_SPECIES: dict[str, str] = {
@@ -76,7 +70,7 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):
         pyboy,
         game_state,
         bundle_path=None,
-        starter: str = "charmander",
+        starter: str | None = "charmander",
     ):
         super().__init__()
         self.pyboy = pyboy
@@ -87,9 +81,8 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):
         self.nav_stats = {"step_calls": 0, "blocked_steps": 0}
         self.last_error = ""
 
-        # Starter to auto-pick when locked in Oak's lab during navigation.
-        # Override before the first go_to() call if you want a different starter.
-        self.starter = starter.lower()
+        # Legacy fixed-policy demos may auto-pick; None delegates the choice.
+        self.starter = starter.lower() if starter else None
 
         self._expected_map_id: int = 0
 
@@ -220,7 +213,8 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):
         ------------------
         If a hop fails while the player is locked in OAKS_LAB with an empty
         party (Oak's cutscene just ended and a starter must be chosen),
-        pick_starter() is called automatically using ``self.starter``, and
+        With starter=None, StarterChoiceRequired returns the decision to the caller.
+        Otherwise pick_starter() is called automatically using ``self.starter``, and
         go_to() restarts from the new position.  This happens at most once
         per call chain (guarded by ``_starter_done``).
         """
@@ -266,6 +260,10 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):
                         and current_map == "OAKS_LAB"
                         and not self.gs.party_pokemon
                     ):
+                        if self.starter is None:
+                            if not self.interrupt.wait_for_control():
+                                raise ControlTimeout("Timed out waiting for Oak's starter offer")
+                            raise StarterChoiceRequired("Choose Bulbasaur, Charmander or Squirtle")
                         print(f"[GO_TO] Locked in Oak's lab — auto-picking {self.starter}…")
                         picked = self.pick_starter(self.starter)
                         if picked:
@@ -325,8 +323,8 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):
         False if the A-press timeout was reached without confirmation.
         """
         pokemon = pokemon.lower().strip()
-        if pokemon not in _STARTER_STEPS:
-            raise ValueError(f"Unknown starter '{pokemon}'. Valid: {list(_STARTER_STEPS)}")
+        if pokemon not in _STARTER_POSITIONS:
+            raise ValueError(f"Unknown starter '{pokemon}'. Valid: {list(_STARTER_POSITIONS)}")
 
         if self.interrupt.is_interrupted():
             raise RuntimeError(
@@ -339,20 +337,11 @@ class AutonomousController(NavCore, NavAstar, HopExecutor):
         if not self.interrupt.wait_for_control():
             raise ControlTimeout("Timed out waiting for control before starter selection")
 
-        # Execute movement steps
-        for step in _STARTER_STEPS[pokemon]:
-            if step == "face_up":
-                # Press UP briefly to change facing toward the pokeball table.
-                # The table blocks movement, so this only changes the facing direction.
-                self.pyboy.send_input(WindowEvent.PRESS_ARROW_UP)
-                for _ in range(self.FRAMES_PER_STEP):
-                    self.pyboy.tick()
-                self.pyboy.send_input(WindowEvent.RELEASE_ARROW_UP)
-                for _ in range(self.FRAMES_RELEASE):
-                    self.pyboy.tick()
-            else:
-                if not self._step(step):
-                    print(f"[STARTER] Warning: step '{step}' didn't move — continuing")
+        # Approach from the current position, including a restored mid-lab checkpoint.
+        if not self.navigate_to_tile(*_STARTER_POSITIONS[pokemon], max_steps=100):
+            return False
+        self.press(WindowEvent.PRESS_ARROW_UP)
+        self.pyboy.tick(self.WALK_ANIMATION_FRAMES)
 
         # Spam A to confirm taking the Pokemon
         target = _STARTER_SPECIES[pokemon]

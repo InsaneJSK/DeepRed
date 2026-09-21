@@ -11,7 +11,7 @@ from pyboy import PyBoy
 
 from autonomous_controller import AutonomousController, BattleController, BattleInterrupt
 from autonomous_controller.game_data import validate_rom
-from main import _run_battle_loop
+from autonomous_controller.scripted_demo import _run_battle_loop
 from memory_state.game_state import PokemonGameState
 
 

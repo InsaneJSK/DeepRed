@@ -12,11 +12,12 @@ from pyboy.utils import WindowEvent
 from autonomous_controller.agent_interface import AgentInterface
 from autonomous_controller.emulator_session import open_emulator
 from autonomous_controller.game_data import validate_rom
-from autonomous_controller.llm_runner import OllamaClient, run_agent
+from autonomous_controller.llm_runner import PLAY_INSTRUCTION, OllamaClient, run_agent
+from autonomous_controller.presentation import DecisionWindow, PresentedSession
 from demo import ROOT, save_checkpoint
 from memory_state.game_state import PokemonGameState
 
-
+import time
 def paused_request(session, perform):
     """HTTP runs in a daemon worker; SDL and emulation stay on the main thread."""
     results = Queue()
@@ -50,72 +51,129 @@ def positive_int(value):
     return number
 
 
-def main(argv=None):
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--goal", required=True)
-    parser.add_argument(
+    stops = parser.add_mutually_exclusive_group()
+    stops.add_argument(
         "--stop-at",
         type=str.upper,
-        help="Stop automatically when this map is reached outside battle/dialogue",
+        default="VIRIDIAN_CITY",
+        help="Local stop on arrival (default VIRIDIAN_CITY); never sent to the model",
     )
-    parser.add_argument("--model", default="qwen3:4b")
+    stops.add_argument(
+        "--no-stop-at",
+        dest="stop_at",
+        action="store_const",
+        const=None,
+        help="Disable the local arrival stop",
+    )
+    parser.add_argument("--model", default="gemma3:4b")
     parser.add_argument("--url", default="http://localhost:11434")
     parser.add_argument("--save", type=Path, default=ROOT / "saves/in-room-start.state")
     parser.add_argument("--rom", type=Path, default=ROOT / "Pokemon_Red/Red.gb")
     parser.add_argument("--max-calls", type=positive_int, default=30)
     parser.add_argument("--max-actions", type=positive_int, default=200)
     parser.add_argument("--timeout", type=positive_int, default=180)
-    parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument(
+        "--overlay",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Show the game and a decision panel in one window",
+    )
+    parser.add_argument("--verbose", action="store_true", help="Print controller diagnostics")
     parser.add_argument("--auto-resume", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--auto-flee",
+        action="store_true",
+        help="Attempt escape automatically up to twice per wild encounter (default off)",
+    )
     parser.add_argument(
         "--think",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Enable reasoning for models that support it (slower)",
+        help="Enable reasoning for supported Ollama models (slower)",
     )
+    return parser
+
+
+def main(argv=None):
+    never_before = False
+    parser = build_parser()
     args = parser.parse_args(argv)
     validate_rom(args.rom)
     client = OllamaClient(args.model, args.url, args.timeout, args.think)
     directory = ROOT / "status/llm-runs" / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     with args.save.open("rb") as saved:
         directory.mkdir(parents=True)
-        print("Run files:", directory, flush=True)
+        print(f"DeepRed | {args.model} | {PLAY_INSTRUCTION}", flush=True)
         with open_emulator(
-            args.rom, window="null" if args.headless else "SDL2", sound_emulated=False
+            args.rom,
+            window="null" if args.headless or args.overlay else "SDL2",
+            sound_emulated=False,
         ) as session:
             session.set_emulation_speed(0 if args.headless else 1)
             session.load_state(saved)
             session.tick()
-            agent = AgentInterface(session, PokemonGameState(session))
-            if args.stop_at and agent.navigation.graph.map_id(args.stop_at) is None:
-                parser.error(f"Unknown --stop-at map: {args.stop_at}")
+            window = None
             checkpoints = 0
 
             def checkpoint():
                 nonlocal checkpoints
                 checkpoints += 1
                 path = save_checkpoint(session, directory / f"checkpoint-{checkpoints:04d}.state")
-                print("Checkpoint:", path, flush=True)
+                if args.verbose:
+                    print("Checkpoint:", path, flush=True)
 
             try:
-                with (directory / "events.jsonl").open("w", encoding="utf-8") as log:
-                    stats = run_agent(
-                        agent,
-                        client,
-                        args.goal,
-                        log,
-                        max_calls=args.max_calls,
-                        max_actions=args.max_actions,
-                        auto_resume=args.auto_resume,
-                        stop_at=args.stop_at,
-                        request=None if args.headless else lambda fn: paused_request(session, fn),
-                        checkpoint=checkpoint,
-                    )
+                if not args.headless and args.overlay:
+                    window = DecisionWindow(session, PLAY_INSTRUCTION, args.model, args.max_calls)
+                    session = PresentedSession(session, window)
+                    if not never_before:
+                        time.sleep(10)
+                        never_before = True
+                agent = AgentInterface(session, PokemonGameState(session))
+                if args.stop_at and agent.navigation.graph.map_id(args.stop_at) is None:
+                    parser.error(f"Unknown --stop-at map: {args.stop_at}")
+
+                def request(perform):
+                    if window:
+                        window.status = "Thinking"
+                        window.pump(force=True)
+                    return paused_request(session, perform)
+
+                with (
+                    (directory / "events.jsonl").open("w", encoding="utf-8") as log,
+                    (directory / "controller.log").open("w", encoding="utf-8") as diagnostics,
+                ):
+                    try:
+                        stats = run_agent(
+                            agent,
+                            client,
+                            log,
+                            max_calls=args.max_calls,
+                            max_actions=args.max_actions,
+                            auto_resume=args.auto_resume,
+                            auto_flee=args.auto_flee,
+                            stop_at=args.stop_at,
+                            request=None if args.headless else request,
+                            checkpoint=checkpoint,
+                            on_decision=window.choose if window else None,
+                            on_automatic=window.automatic if window else None,
+                            diagnostics=diagnostics,
+                            verbose=args.verbose,
+                        )
+                    finally:
+                        checkpoint()
                     (directory / "summary.json").write_text(
                         json.dumps(stats, indent=2), encoding="utf-8"
                     )
+                print("Saved run:", directory, flush=True)
+                if window:
+                    window.hold(stats)
             finally:
-                checkpoint()
+                if window:
+                    window.close()
 
 
 if __name__ == "__main__":

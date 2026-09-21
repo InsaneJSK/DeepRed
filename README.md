@@ -1,223 +1,202 @@
 # DeepRed
 
-Autonomous Pokemon Red navigation and gameplay using PyBoy and structured RAM
-observations. See [NAVIGATION.md](NAVIGATION.md) for the implementation and its
-verified routes and limitations.
+**Let a local language model play Pokémon Red—without sending it screenshots.**
 
-## Setup with uv
+DeepRed turns emulator RAM into structured observations and gives an LLM actions for navigation, NPC interaction, starter selection, battles, and menus. The model chooses what to do; Python controllers handle button presses, walking, doors, and mandatory dialogue. The aim is a fun way to watch AI play, without training a game-playing policy.
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if needed,
-then open PowerShell in this repository:
+**Status: working local prototype.** Early-game journeys and individual service flows have been verified. Completing the entire game autonomously has not.
 
-```powershell
-uv sync --locked
-```
+## Demo
 
-uv manages Python and the `.venv` environment. No manual environment activation
-is needed. `.python-version` selects Python 3.11.9; `pyproject.toml` declares
-dependencies and `uv.lock` records their exact resolved versions. Commit all
-three files. The emulator dependencies preserve the tested pre-migration versions.
+<!-- Add the recorded walkthrough link here when available. Do not commit ROMs or saves. -->
 
-The following local assets are also required; uv does not download game assets:
+Recording option: launch with `uv run main.py --auto-flee` to enable a controller policy that attempts escape up to twice per wild encounter before returning decisions to the model. It is off by default. The console and game panel label these as automatic attempts, and they do not count as LLM calls. When adding a video recorded with this option, disclose that wild-encounter escape attempts used this policy.
 
-- `Pokemon_Red/Red.gb`: the matching Pokemon Red ROM.
-- `saves/in-room-start.state`: the existing initial emulator save.
+The model's goal is **“Reach VIRIDIAN_CITY.”** This is a destination-directed demo: the target is supplied, while the model chooses gameplay actions from RAM observations. DeepRed handles intermediate maps, pauses for the starter decision, lets the model choose moves in battle, and resumes interrupted journeys afterward.
 
-Navigation loads the checked-in `game_data/pokemon_red.json` bundle. No pokered
-checkout or separately generated world_graph.json is needed to play or run the
-normal navigation tests. The supported ROM SHA-1 is
-`ea9bcae617fdf159b045185467ae58b2e4a48b9a`; the entry point checks it before booting.
-See [game_data/README.md](game_data/README.md) for provenance and optional updates.
+Watch the game and model decisions together in one window. A human CLI provides the same gameplay actions for manual testing.
 
-## Run and test
+The prompt also encourages exploring unfamiliar places, avoiding repeated backtracking without a reason, and trying another destination or interaction when an action makes no progress. This is general exploration guidance; it does not supply a route or walkthrough.
 
-Watch the emulator navigate from the bedroom through Route 1 to Viridian City:
+The model receives visit counts and a compact memory of observed dialogue, first NPC interactions, and changes to party, inventory, money, or badges. Successful automatic actions no longer displace the last six model outcomes. The current travel limit rejects the second identical directed trip without new observations: `X → Y → X` cannot immediately continue to `Y`. `AgentMemory.TRIP_LIMIT` controls this limit and the warning threshold together. The rejection is returned to the model so it can choose another destination or interaction. Three consecutive failures stop the run. Discovering a map, new dialogue, a first NPC interaction, or a tracked state change resets the travel counter. These are observed-change heuristics, not a complete story-progress tracker. Memory lasts for the current run and is not restored from emulator checkpoints.
+
+For the clean recording view, simply run:
 
 ```powershell
 uv run python -X utf8 main.py
 ```
 
-Change `GOAL` in `main.py` to choose another destination.
-Close the emulator window or press Ctrl+C in the terminal to exit, including
-during navigation or battles. Shutdown releases the emulator without overwriting
-the original cartridge RAM file.
+Defaults: **visible game + decision panel**, **qwen3:4b**, **30 model calls**, and
+the goal **“Reach VIRIDIAN_CITY.”** A local stopping rule ends
+the run upon arrival in Viridian City outside battle/dialogue.
+Supply `--save PATH` if your
+checkpoint is not `saves/in-room-start.state`.
 
-Run the test suite and, separately, the full headless bedroom-to-Viridian regression:
+The panel shows the persistent goal, current model choice, last five choices,
+travel destination, and call count. It stays open on the final frame until you
+close it. The console prints readable model choices, a short startup/stop message,
+and the saved run path. It does not print automatic advances or routing chatter.
+Detailed diagnostics remain in the run folder. Use `--verbose` to print them,
+`--headless` to hide the window, or `--no-overlay` for the plain PyBoy window.
+The integrated panel uses Tkinter; `--no-overlay` is also available for Python
+builds without Tk support. Presentation pixels are never sent to the model.
+Press **Space** while the game window is focused to toggle **1x / unlimited**
+emulation speed, just like PyBoy. The current mode appears below the panel.
+This speeds up gameplay, not model inference; the game still pauses for decisions.
 
-```powershell
-uv run pytest
-uv run python -X utf8 scratch/navigation_regression.py
+### Historical directed-navigation run
+
+On 21 September 2026, a headless run from a bedroom checkpoint reached Route 1
+with **`qwen3:4b` choosing Bulbasaur itself**:
+
+| Model decisions | Calls |
+| --- | ---: |
+| Request the final destination | 1 |
+| Choose a starter | 1 |
+| Choose moves in the rival battle | 6 |
+| **Total** | **8** |
+
+Eight dialogue advances and two route resumes required **zero model calls**.
+Ollama reported **11,966 input tokens and 148 output tokens**. The run used
+thinking disabled, temperature 0, an 8,192-token context, and `--stop-at ROUTE_1`.
+Its goal was: “Choose whichever starter you prefer, then reach ROUTE_1. Request
+ROUTE_1 as your final destination.”
+
+This earlier trial explicitly supplied the destination; it does not demonstrate
+independent progression under the current gameplay-only instruction.
+This is one observed early-game run, not a success-rate benchmark. Starting
+checkpoint, game RNG, prompt, and model behavior can change the outcome and counts.
+
+## How it works
+
+```mermaid
+flowchart LR
+    LLM[Local LLM via Ollama] -->|Structured action| API[Validated action interface]
+    Human[Human CLI] --> API
+    API --> Controllers[Navigation, battle and menu controllers]
+    Controllers -->|Button inputs| Emulator[PyBoy emulator]
+    Emulator -->|Live RAM| State[Structured game observation]
+    State --> LLM
+    Terrain[Bundled map geometry] --> Controllers
+    API --> Logs[Action logs and call metrics]
 ```
 
-Pytest discovers tests in `tests/`, including the existing unittest tests. Tests
-marked `integration` require a real emulator and local game assets; missing
-required assets are reported as skips, not passes. Run the fast subset with
-`uv run pytest -m "not integration and not source_data"`, or only integration tests with
-`uv run pytest -m integration`. The full travel regression above is a separate
-script and is not included in pytest discovery. The optional `source_data` check
-verifies bundle regeneration against pokered and skips when that checkout is absent.
+- **Memory-based observations:** location, party, HP, moves and PP, inventory, dialogue, NPC objects, menus, and available actions. No screenshot perception.
+- **Destination-level navigation:** `navigate ROUTE_1` crosses intermediate maps automatically. Routing combines map connectivity, walkable terrain, and live object occupancy checks.
+- **Explicit choices:** starter, battle moves, supported items and switches, NPC interactions, and shop/healing options.
+- **Automatic continuation:** mandatory dialogue advances locally; interrupted travel resumes after battle. Blockers return control to the model.
+- **Observable execution:** bounded retries, call/token metrics, JSONL traces, manual checkpoints, and periodic saves during AI runs.
 
-The headless travel regression leaves original saves and cartridge RAM unchanged. Add
-`--checkpoint` to retain test checkpoints in `scratch/`.
+The action interface is provider-independent. **Ollama is the implemented adapter today**; other local or cloud providers can use the same interface.
 
-An expected story-gate failure must specify the exact map, position, and reason;
-an unrelated navigation failure will fail the regression:
+## Why it runs locally
+
+DeepRed ships the controller, not a copy of Pokémon Red. **ROMs, cartridge saves, and emulator checkpoints are not distributed with this repository.** Supply your own game assets that you are entitled to use. No game download links or instructions for obtaining unauthorized copies are provided.
+
+This release has no hosted playable demo: setup is deliberately local, using user-supplied assets. A recorded walkthrough can demonstrate it without bundling a playable copy of the game. This is a packaging choice, not a claim that browser-based emulation is technically impossible.
+
+Pokémon and related game content belong to their respective owners. DeepRed is an independent fan project, unaffiliated with Nintendo, Game Freak, or The Pokémon Company. The checked-in navigation data is derived from pinned `pret/pokered` source; see [data provenance](game_data/README.md).
+
+## Quick start
+
+Tested on Windows with Python 3.11.9 and PyBoy 2.7.0. Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then run from the repository directory:
 
 ```powershell
-uv run python -X utf8 scratch/navigation_regression.py --goals VIRIDIAN_FOREST --expect-blocked --blocked-map VIRIDIAN_CITY --blocked-position 19 10 --blocked-reason "A game script moved or stopped the player."
+uv sync --locked
 ```
 
-To create a separate manual-testing checkpoint, provide an input and a new
-output filename. Existing files are never overwritten:
+### Supply the ROM and create a checkpoint
+
+Place your supported Pokémon Red ROM at `Pokemon_Red/Red.gb`. The demos validate SHA-1 `ea9bcae617fdf159b045185467ae58b2e4a48b9a` before starting. Other revisions, languages, and ROM hacks are not currently supported. Navigation uses `game_data/pokemon_red.json`; **no external pokered checkout is needed**.
+
+Already have a compatible PyBoy checkpoint? Pass it with `--save`. Otherwise, boot your ROM:
 
 ```powershell
-uv run python -m autonomous_controller.save_state --input saves/in-room-start.state --output saves/new-checkpoint.state --frames 600
+uv run python -m pyboy Pokemon_Red/Red.gb
 ```
 
-Manual emulator helpers now honor window closure and do not write cartridge RAM
-on exit. Closing before checkpoint creation cancels the operation.
+Play through the introduction until Red is standing in his bedroom and the text has closed. In the game window: **arrow keys** move, **A** is the Game Boy A button, **S** is B, **Enter** is Start, and **Backspace** is Select. Press and release **Z** to save `Pokemon_Red/Red.gb.state`, then close the window. Z replaces that standalone PyBoy checkpoint if it already exists.
+
+The examples below load that file explicitly. The demos' default `saves/in-room-start.state` is a local convenience and is not included.
+
+### Start Ollama and let the model play
+
+Install/start [Ollama](https://ollama.com/) and obtain a model that fits your machine:
+
+```powershell
+ollama pull qwen3:4b
+uv run python -X utf8 main.py --save Pokemon_Red/Red.gb.state
+```
+
+`--model` defaults to `qwen3:4b`; `--url` defaults to `http://localhost:11434`. The adapter uses [structured JSON responses](https://docs.ollama.com/capabilities/structured-outputs).
+
+The game and decision panel are visible at normal speed by default. Use `--headless` to run without a window. The game pauses during inference while the window remains responsive. Close the window or press Ctrl+C to stop. `ai_demo.py` remains an alternative entry point with the same defaults as `main.py`.
+
+`--stop-at ROUTE_1` changes only the local arrival stop; `--no-stop-at` disables it. Neither changes the model's fixed Viridian City goal. The model receives that goal, tool instructions, current observations, and recent outcomes. A model `finish` response is a claim to inspect, not independent proof of goal completion.
+
+## Human CLI and checkpoints
+
+```powershell
+uv run python -X utf8 demo.py --save Pokemon_Red/Red.gb.state --no-headless --auto-advance
+```
+
+The CLI prints current state and valid actions:
+
+| Command | Purpose |
+| --- | --- |
+| `navigate ROUTE_1` | Travel to a final destination across maps |
+| `choose_starter bulbasaur` | Choose a starter when Oak offers the decision |
+| `interact 1` | Approach an NPC/object using its printed slot |
+| `fight 0` | Choose a move by zero-based index |
+| `switch 1` | Send out a healthy reserve party member |
+| `use_item 2 0` | Use bag item 2 on party member 0, where supported |
+| `choose 0` / `quantity 3` | Choose a menu option / shop quantity |
+| `advance` / `resume` | Advance text / continue interrupted travel |
+| `cancel` / `run` | Back out of a supported menu / attempt to flee |
+| `observe` / `json` / `help` | Inspect state and command syntax |
+| `/save` | Create a timestamped checkpoint in `saves/` |
+| `/save saves/after-healing.state` | Save to a chosen new filename |
+| `quit` | Exit without another save |
+
+`--auto-advance` stops at choices. Without it, issue `advance` when listed. Indices start at zero except NPC/object slots, which use their printed numbers. Shared sprites use generic role labels rather than guessed identities. Interaction supports talking over counters.
+
+CLI saves never overwrite existing files. Load one in either runner:
+
+```powershell
+uv run python -X utf8 main.py --save saves/after-healing.state --no-stop-at --max-calls 20
+```
+
+Checkpoints preserve the emulator, including battles and menus. Model history, window settings, and pending navigation destinations are not included; the model replans from the observed state. Set any desired runner limits again.
+
+## Measuring calls and inspecting failures
+
+Each run creates an ignored `status/llm-runs/<timestamp>/` directory:
+
+- `events.jsonl`: exact prompts, responses, action results, and final summary.
+- `controller.log`: low-level routing and controller output hidden from the clean console (use `--verbose` to print it instead).
+- `summary.json`: calls by decision type, automatic actions, token usage, timings, and stopping reason. After interruption, use the summary event in the JSONL log.
+- `checkpoint-*.state`: emulator checkpoints every ten actions and on exit.
+
+Model choices require model calls; mandatory advances, route resumes, and optional `--auto-flee` escape attempts do not. Auto-flee never applies to trainer battles, tutorials, or forced-switch/menu decisions. Escape is not guaranteed; after two attempts in a still-active wild encounter the model receives control and the attempt history. Encounter budgets reset when an observation shows the battle has ended. The run log records whether the policy was enabled, each automatic action, and separate automatic-action totals. Counts include invalid responses, failed requests, and model `finish` responses, with no hidden HTTP retries. Token totals are backend-reported; missing usage is tracked separately. These are per-run measurements, not full-game or cloud-billing estimates.
+
+Limits include `--max-calls` (default 30), `--max-actions` (200), repeated failures, unchanged observations, and repeated travel cycles. Six recent model outcomes (or automatic failures) accompany the current state, plus visit counts and up to eight notable observations. `--think` enables reasoning on supported Ollama models and is off by default. `--no-auto-resume` lets the model decide when to continue interrupted travel.
+
+Automatic actions stop with `automatic_no_progress` after eight consecutive actions leave the observation unchanged. Successful escape/dialogue/travel sequences can continue beyond eight automatic actions, subject to the total action budget. The call count printed on shutdown always counts model requests, not automatic actions.
+
+## Scope and limitations
+
+Verified controller flows include early-game multi-map travel, starter selection, battle move selection, nickname rejection, Oak's parcel delivery, shopping, and healing. Grouped unit tests and real-emulator integration tests cover validation, menus, interruptions, call accounting, and shutdown.
+
+- **No verified full-game completion.** Working controller flows do not establish that a small model can plan an entire playthrough.
+- Models can repeat decisions or finish prematurely. Logs and budgets expose and bound those failures.
+- Navigation does not provide generalized Surf/Cut/Strength or ledge planning. Special transitions, story gates, and some terrain remain unsupported.
+- Bundled geometry describes terrain beyond the screen. Live RAM does not provide continuously simulated offscreen NPC positions; interaction rechecks visibility.
+- Menu support covers implemented battle/service flows, not every PC, trade, minigame, or special event. Unknown menus stop automation.
+- `main.py` launches the AI. The older fixed-policy loop is retained separately in `autonomous_controller/scripted_demo.py` for regression tools.
+
+See [navigation notes](NAVIGATION.md) and [data limitations](game_data/README.md). Next priorities: longer multi-step runs, better progress observations, and broader story/menu coverage. More providers and a hosted UI are future work.
 
 ## Development
-
-### Agent interface
-
-Try the human-controlled CLI from the project folder:
-
-```powershell
-uv run python demo.py
-# Watch the game and automatically advance mandatory dialogue/animation:
-uv run python demo.py --no-headless --auto-advance
-# Or use another existing checkpoint:
-uv run python demo.py --save saves/oak-room-battle.state
-```
-
-The default is headless with manual advancement. `--no-headless` opens a game
-window at normal speed; `--headless` runs without it at unlimited speed.
-`--auto-advance` automatically executes `advance` only when it is the sole
-available action. It stops at a choice, unsuccessful result, or eight consecutive
-automatic advances. `--no-auto-advance` keeps advancement manual. The game pauses
-while you type, and the visible window continues processing close events.
-It starts from the bedroom save by default, displays current state and
-available actions, and accepts commands such as `navigate REDS_HOUSE_1F`,
-`interact 5`, `fight 0`, `switch 1`, `use_item 2 0`, `advance`, and `resume`.
-Party/bag/move indices are zero-based; object slots use the numbers printed by
-the CLI. Use `help` for syntax, `json` for the complete observation, and
-`quit` or Ctrl+C to exit without saving. Each action uses the same interface
-below; no separate human-only gameplay logic is introduced.
-
-Type `/save` at any CLI prompt to create a timestamped emulator checkpoint in
-`saves/`, or `/save saves/my-checkpoint.state` to choose a filename. Paths with
-spaces can be quoted. Existing files are not overwritten. Saving keeps the demo
-open and prints the path and a command to reload it:
-
-```powershell
-uv run python demo.py --save "saves/my-checkpoint.state" --no-headless --auto-advance
-```
-
-Checkpoints preserve the game, including battles and menus. On a new run, choose
-your window/auto-advance options again and reissue any interrupted travel goal.
-`quit` does not save again or remove checkpoints you already created.
-
-`AgentInterface` exposes JSON-compatible observations and validated actions to a
-future model adapter. It uses an already loaded emulator session and does not
-own its lifetime or call a model:
-
-```python
-from autonomous_controller.agent_interface import AgentInterface
-
-agent = AgentInterface(session, game_state)
-observation = agent.observe()  # does not advance the emulator
-schema = agent.action_schema()  # portable JSON Schema for action requests
-result = agent.execute({"action": "navigate", "destination": "ROUTE_1"})
-```
-
-Choose actions from `observation["actions"]`. `navigate` accepts any known map
-as the final destination, including maps beyond the current map's `exits`.
-For example, `navigate ROUTE_1` from `REDS_HOUSE_2F` handles the stairs, front
-door and Pallet Town automatically. Accessibility is unverified until attempted;
-the observation does not expose the global map graph. Results include `status`,
-`detail`, and an updated `observation`. `submitted` means input was sent, not
-that an attack or escape succeeded. Use `advance` to reach the next decision.
-
-Available request names are `navigate`, `interact`, `resume`, `fight`, `switch`, `use_item`,
-`run`, `cancel`, `advance`, `choose`, and `quantity`. Their arguments are described by `action_schema()`;
-party, move, and bag indices are zero-based. Battle interrupts retain the travel
-destination; after combat and dialogue, `resume` continues that request. A new
-navigation request replaces it. The existing starter-selection fallback remains
-part of navigation. Unsupported decision menus expose no available action.
-
-### Local Ollama runner
-
-Start Ollama with a locally installed model, then run:
-
-```powershell
-uv run python ai_demo.py --model qwen3:4b --goal "Reach ROUTE_1" --stop-at ROUTE_1 --max-calls 30 --no-headless
-# Start from a manual checkpoint:
-uv run python ai_demo.py --model qwen3:4b --save saves/after-healing.state --goal "Visit VIRIDIAN_MART and buy 3 Poke Balls" --max-calls 20
-```
-
-`--url` defaults to `http://localhost:11434`; `--model` defaults to `qwen3:4b`.
-Headless is the default. `--think` enables reasoning on supported models; it is
-off by default. The runner uses Ollama's native `/api/chat` with structured JSON
-and validates every gameplay action through the same interface as the CLI.
-
-Each real choice gets one model call: destinations, interactions, menus and
-battle turns. Mandatory text/animations advance automatically. After a battle,
-the pending route resumes automatically unless `--no-auto-resume` is set.
-A blocked automatic resume returns control to the model; it is not retried in
-a controller loop. Story events and the existing automatic starter selection
-remain controller behavior. The model never receives screenshots or the global
-route graph, and never needs to supply an intermediate route.
-
-Each run writes `events.jsonl`, `summary.json`, and checkpoints under the ignored
-`status/llm-runs/<timestamp>/` directory. The summary counts HTTP attempts
-(including failed calls and the final model `finish` decision), calls by decision
-type, automatic actions, model latency and backend-reported token usage.
-Missing token usage is tracked via `responses_with_usage`; totals cover only
-responses that supplied counts. These measurements are not a cloud cost quote.
-Only the last six action outcomes accompany the current observation, bounding
-history growth. Complete prompts, responses and action results remain in the log.
-
-The run stops at `--max-calls` (default 30), `--max-actions` (default 200), repeated
-failures, three consecutive model actions with unchanged observations, unsupported
-menus, or when the model says `finish`. For destination-only goals, `--stop-at MAP`
-stops on observed arrival outside battle/dialogue, avoiding a completion call. Model completion
-is a claim to inspect in the log, not an independently verified success.
-Ctrl+C or closing the game window also stops execution. Checkpoints are saved
-every ten executed actions and on exit; open them with either demo's `--save`.
-On an interrupted run, the summary is in the final event in `events.jsonl`.
-
-`interact SLOT` approaches a current-map sprite, faces it, and starts dialogue.
-It leaves the first text page visible; use `advance` to continue. Object slots
-are local to each map, and sprites can be people, items, or other objects. An
-off-screen/hidden entry is only confirmed as a target after approaching it.
-For example, after returning to Oak's lab with the parcel, `interact 5` talks to
-Oak and `advance` handles the delivery. Interaction supports adjacent targets and
-talking across tiles identified by the game as counters. Objects show readable
-sprite roles/names while retaining their map-local slot for `interact`.
-
-Overworld menus expose named options with zero-based indices. Use `choose 0`
-for the first displayed option, or `quantity 3` at a shop's quantity prompt.
-`advance` (including auto-advance) stops at these choices. For example, after
-delivering the parcel, talk to the Mart clerk, choose Buy, choose Poke Ball,
-set the quantity, then choose Yes to confirm payment. Use `advance` whenever
-it is the only available action, or enable `--auto-advance`.
-
-At a Pokemon Center, interact with the nurse, advance to HEAL/CANCEL, and
-choose Heal. In Viridian City, the old man's optional catching tutorial is
-available after parcel delivery: talk to him and answer No to "Are you in a
-hurry?" The scripted demonstration advances without offering player fight actions.
-
-Window closure propagates `EmulatorClosed` to the session owner. Keep the usual
-`finally: emulator.stop(save=False)` cleanup. The existing `main.py` demo still
-uses its fixed policy; the interface does not introduce a model dependency.
-
-The default `dev` group includes Ruff and pytest. Ruff checks basic Python errors
-and import ordering, and formats Python code with a 100-character target width.
-Configuration lives in `pyproject.toml`; external repositories, local game assets,
-reports, and notebooks are excluded from Ruff.
-
-Check before committing (these commands do not edit source files):
 
 ```powershell
 uv run ruff check .
@@ -225,53 +204,12 @@ uv run ruff format --check .
 uv run pytest
 ```
 
-Preview changes before applying them:
+For tests without game assets: `uv run pytest -m "not integration and not source_data"`. Integration tests skip when local ROM/checkpoint files are missing. The optional `source_data` check requires the pinned source checkout. No automatic commit hooks are installed. Apply changes manually with `uv run ruff check . --fix` and `uv run ruff format .`.
 
-```powershell
-uv run ruff check . --diff
-uv run ruff format . --diff
-```
+The real escape regression uses `saves/wild-escape.state`, a local wild-battle checkpoint known to permit escape within two attempts. To replay other such fixtures, set `DEEPRED_WILD_STATES` to their paths separated by your platform's path separator (`;` on Windows). The test checks the engine's escape message, battle termination, unchanged move PP/inventory, and zero model calls; it never overwrites checkpoints.
 
-Apply safe lint fixes and formatting when ready. Replace `.` with a filename to
-work on one file. Some lint findings need manual edits.
+`AgentInterface.observe()`, `action_schema()`, and `execute()` are the shared contract. Observations never advance emulation. Results include a status, detail, and fresh observation; `submitted` means inputs were sent, not that an attack or escape succeeded. The session owner handles cleanup.
 
-```powershell
-uv run ruff check . --fix
-uv run ruff format .
-```
+Further tools: `scratch/navigation_regression.py` for scripted travel, `autonomous_controller.save_state` for checkpoint helpers, and [the data exporter](game_data/README.md#optional-regeneration) for maintainers. Optional notebooks use `uv sync --locked --all-groups`. Game assets, generated checkpoints, and session reports remain local.
 
-These tools run on demand; no automatic commit hooks are installed.
-Notebook support is optional:
-
-```powershell
-uv sync --locked --all-groups
-uv run --group notebooks python -m ipykernel --version
-```
-
-Select `.venv/Scripts/python.exe` as the interpreter in your editor. For notebooks,
-enable the `notebooks` group and select that same environment as the kernel.
-
-Use `uv add PACKAGE`, `uv add --dev PACKAGE`, and `uv remove PACKAGE` to change
-dependencies. Run `uv lock --check` to check that the lockfile matches the project.
-Dependency upgrades are separate from this migration; rerun navigation tests
-after deliberately changing the emulator version pins.
-
-`requirements.txt` has been replaced by `pyproject.toml` and `uv.lock`. If another
-tool needs a requirements export, generate it rather than maintaining two lists:
-
-```powershell
-uv export --locked --no-dev --format requirements-txt --output-file requirements.txt
-```
-
-The old `venv/` directory has been removed; `.venv/` is the active uv environment.
-Vendored repositories and non-Python projects keep their own dependency files.
-
-## Migration validation (19 September 2026)
-
-Verified `uv lock --check`, all 12 unit tests, optional notebook support, and the
-full headless bedroom → Route 1 → Viridian City run in `.venv`. The emulator run
-matched the previous result: 128 movement calls and 18,089 emulated frames.
-
-The existing NumPy 2.4.0 pin is intentionally preserved for this migration.
-uv reports that this release was yanked upstream for a backward-compatibility
-bug; changing that baseline should be a separately tested dependency update.
+Built with [PyBoy](https://github.com/Baekalfen/PyBoy), [Ollama](https://ollama.com/), and navigation data derived from [pret/pokered](https://github.com/pret/pokered).

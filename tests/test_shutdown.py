@@ -10,7 +10,7 @@ import pytest
 from pyboy import PyBoy
 from pyboy.utils import WindowEvent
 
-import main
+from autonomous_controller import scripted_demo as main
 from autonomous_controller.battle_controller import BattleController
 from autonomous_controller.emulator_session import EmulatorClosed, EmulatorSession, open_emulator
 from autonomous_controller.nav_core import NavCore

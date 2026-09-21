@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent
 HELP = """Commands (party/bag/move indices start at 0; use object slots as printed):
   navigate MAP_NAME       Travel across maps to a destination, e.g. ROUTE_1
   interact SLOT           Approach and talk to a listed object, e.g. interact 1
+  choose_starter NAME      Choose bulbasaur, charmander, or squirtle at Oak's lab
   choose OPTION           Choose a displayed menu option (indices start at 0)
   quantity AMOUNT         Set the shop quantity, e.g. quantity 5
   resume                  Resume travel interrupted by a battle
@@ -93,6 +94,8 @@ def show(observation):
         or "empty",
     )
     menu = observation.get("menu")
+    if observation.get("starter_options"):
+        print("Starters:", ", ".join(observation["starter_options"]))
     if menu:
         print("Menu:", menu["kind"])
         for option in menu["options"]:
